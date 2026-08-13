@@ -1,0 +1,161 @@
+# Implementation notes
+
+Why things are built the way they are, and what measurement changed my mind.
+Read this before altering the mechanisms — several of them look arbitrary until
+you know which failure they exist to prevent.
+
+## Data model
+
+Every fact is a row in `facts` carrying, beyond its text:
+
+| field | why it exists |
+|---|---|
+| `origin` | `user_stated` outranks `agent_inferred`. An agent's guess must never silently overwrite what you said. |
+| `decay_class` | Half-lives: volatile 14d, medium 90d, slow 365d, immutable never. A port number rots faster than a coding preference. |
+| `key` | A dotted subject id (`db.port`). Two facts sharing a key are competing values for one subject — that is what makes contradiction detectable. |
+| `verify_cmd` | A shell command that proves the fact. The only signal in the system that is not an opinion. |
+| `good_recalls` / `bad_recalls` | Track record: did acting on this fact go well? |
+| `suspect_since` / `suspect_reason` | Set when something this fact rests on was falsified. |
+
+Nothing is deleted. `superseded`, `archived`, `suspect` and `retired` rows stay
+with pointers to what replaced them, plus a `journal` row per action.
+
+## Confidence
+
+```
+belief = asserted × origin_weight × decay(age) × verify_signal
+                  × outcome_signal(good, bad) × support_signal
+```
+
+Six independent signals because each catches what the others miss. A passing
+check resets the decay clock; a failing one collapses belief 10×. Recall track
+record is Laplace-smoothed so a single bad run does not condemn a fact and an
+ungraded fact is neither rewarded nor punished.
+
+## The two mechanisms nobody else has
+
+**Falsification cascade** (`graph.py`). Facts declare what they rest on. When a
+root fails its check, is superseded, or is retired, every descendant becomes
+`suspect` — visibly resting on nothing rather than quietly keeping its old
+confidence. Recovery reinstates dependents unless some *other* parent is still
+broken. The walk is depth-capped and cycle-safe.
+
+**Edges build themselves.** Nobody hand-maintains a dependency graph, so the
+graph is inferred: recall facts A and B, write C in the same session, and C is
+linked to them as observed causality, weighted below a declared edge. Without
+this the feature would be technically present and practically unused.
+
+**Recall ledger** (`outcomes.py`). Every fact surfaced into a task is logged
+with a `recall_id` and graded later by whichever signal arrives — a failing
+check, a contradiction, an explicit report from the harness, or a human. Two of
+the four need no cooperation from anything, which is why the loop closes even
+when nobody wires it up.
+
+## Decisions that came from measurement
+
+Each of these was wrong on first attempt. The measurement is recorded because
+the reasoning that produced the wrong answer was perfectly plausible.
+
+**Contradiction has an inverted burden of proof.** Facts sharing a `key` are
+competing values, so a *different* value is a conflict by default — not
+something that must clear a similarity bar. The first version required low word
+overlap, which let "cache backend is redis" and "cache backend is memcached"
+both stay active.
+
+**`holds` from a model does not reset the decay clock unless the backend is
+calibrated.** A model saying "looks fine" is the same guess that wrote the
+fact, made again. But making it *always* inert turned the audit into a one-way
+ratchet: a true fact the audit had just confirmed still decayed to the floor.
+The compromise is a discounted soft-verification, worth strictly less than a
+passing shell command.
+
+**Local audits are report-only by default.** The best local model tested still
+called half of a set of *confirmed* facts stale. Applying that unattended fills
+a store with spurious doubt.
+
+**Trust is earned by calibration, not by backend name.** The first version
+hardcoded `anthropic` as trusted, so a CLI agent that demonstrably read
+evidence was permanently distrusted while a cloud model got trust without ever
+being probed.
+
+## Calibration (`calibrate.py`)
+
+An audit backend gets to mark your memory wrong, so it has to earn that.
+Accuracy against contradicting evidence cannot distinguish a careful auditor
+from one that answers `stale` unconditionally — both score well. So the probe
+runs the same four facts past three evidence sets (refuting, confirming,
+irrelevant) and checks whether the **verdicts change with the evidence**.
+
+Measured, greedy decoding, three runs per probe:
+
+| model | contradicting | confirming | absent | |
+|---|---|---|---|---|
+| qwen2.5:0.5b | 2/4 | 0/4 | 0/4 | answers `stale` regardless of input |
+| qwen2.5:1.5b | 2/4 | 2/4 | 0/4 | invents ids — 9 verdicts for 4 facts |
+| qwen2.5:3b | 75% | **25%** | 100% | reads, but treats *mention* as contradiction |
+| frontier via `exec` | 75% | 75% | 100% | passes at 83–92% |
+
+The discriminating axis is `confirming` alone. Prompt engineering did not
+rescue 3B: an explicit prior made it *worse*, and adding a worked example
+produced identical overall accuracy with the errors merely redistributed.
+
+## Security: executable checks are gated
+
+`verify_cmd` is shell, and facts are written by agents that read untrusted
+input. Without a gate, one prompt-injected `memory_write` turns `nenapu verify`
+into scheduled remote code execution.
+
+- Nothing runs until a human approves that exact command.
+- Approval binds to a hash, so editing a blessed command revokes it.
+- Omitting the ledger connection fails closed — refusal, not a shell.
+- No path over MCP or HTTP can approve anything.
+- Non-interactive shells refuse rather than defaulting to yes.
+- A blocked check is absence of evidence, never failure, so it cannot demote a
+  fact or trigger a cascade.
+
+## Concurrency
+
+MCP server, CLI and cron all write the same file. Reproduced before fixing:
+eight writers produced eight identical active facts; eight graders each scored
+one recall.
+
+- `BEGIN IMMEDIATE` takes the write lock *before* the read a decision depends
+  on. Python's sqlite3 starts transactions on the first *write*, which is too
+  late.
+- Grading folds check and write into one statement (`UPDATE ... WHERE
+  outcome='pending'`, then test `rowcount`).
+- A partial unique index on `(scope, text) WHERE status='active'` makes
+  duplicates unrepresentable even outside a transaction.
+- Bounded retry with jittered backoff for lock contention.
+
+## Performance
+
+At 3,000 facts. Three of the four causes were regressions introduced by the
+concurrency fix, which was correct and unmeasured.
+
+| operation | before | after | cause |
+|---|---:|---:|---|
+| write a fact | 180 ms | 2.2 ms | `synchronous=FULL` fsyncs every commit |
+| recall | 5,745 ms | 87 ms | one fsync per result row; FTS reindex on every use-count bump |
+| cascade (900 deps) | 345,850 ms | 102 ms | one durable write per affected node |
+| dedupe | 103,478 ms | 3,230 ms | O(n²) all-pairs comparison |
+
+Dedupe now uses a prefix filter over rarest tokens, run deliberately looser
+than the verifier so containment matches cannot slip through, and verified
+against the original implementation: the fast path archives exactly the same
+set.
+
+## Token cost
+
+The core loop never calls a model. What is spent is MCP tool schemas, which sit
+in context on every request whether memory is touched or not — hence a small
+surface (operator jobs live in the CLI, never registered as tools), lean recall
+results that omit predictable fields, and a test asserting the surface stays
+under budget.
+
+## Things still open
+
+- No full-store backup/restore; export is a filtered Markdown block.
+- Dependencies float; no lockfile.
+- The `anthropic` backend proper is unexercised — `exec` covers the same path.
+- Ollama keeps generating after a client timeout; handled, not elegant.
