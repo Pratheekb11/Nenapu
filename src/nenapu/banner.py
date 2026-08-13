@@ -45,11 +45,48 @@ THEMES: dict[str, list[str]] = {
 DEFAULT_THEME = "teal"
 
 
-def hero_shades() -> list[str]:
+def config_path() -> "Path":
+    """Where a chosen theme is remembered.
+
+    A JSON file rather than the store's meta table: the one-line stamp on
+    routine commands must not have to open a database to know what colour to
+    be.
+    """
+    from pathlib import Path
+
+    from .db import default_db_path
+
+    return default_db_path() / "config.json"
+
+
+def read_config() -> dict:
+    import json
+
+    try:
+        return json.loads(config_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_config(**values) -> None:
+    import json
+
+    path = config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({**read_config(), **values}, indent=2) + "\n")
+
+
+def resolve_theme() -> str:
+    """Environment beats the saved choice, so a one-off override needs no
+    persistence and CI can pin `mono` without touching the user's config."""
     import os
 
-    return THEMES.get(os.environ.get("NENAPU_THEME", DEFAULT_THEME).lower(),
-                      THEMES[DEFAULT_THEME])
+    name = os.environ.get("NENAPU_THEME") or read_config().get("theme") or DEFAULT_THEME
+    return name.lower() if name.lower() in THEMES else DEFAULT_THEME
+
+
+def hero_shades() -> list[str]:
+    return THEMES[resolve_theme()]
 
 
 HERO_SHADES = THEMES[DEFAULT_THEME]
@@ -85,8 +122,10 @@ def _unicode(console) -> bool:
 
 
 def stamp(version: str = "") -> str:
-    """One line, for routine commands."""
-    return f"[dim]{STAMP}  nenapu{(' ' + version) if version else ''}[/]"
+    """One line, for routine commands — tinted by the chosen theme."""
+    accent = THEMES[resolve_theme()][1]
+    name = f"nenapu{(' ' + version) if version else ''}"
+    return f"[{accent}]{STAMP}[/] [dim]{name}[/]"
 
 
 def _store_facts(conn: sqlite3.Connection | None) -> list[tuple[str, str]]:

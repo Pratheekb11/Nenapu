@@ -196,7 +196,14 @@ At 3,000 facts: write **2.2 ms**, recall **87 ms**, cascade over 900 dependents
 
 ## Themes
 
-`NENAPU_THEME=teal|violet|indigo|jade|mono`, and `NENAPU_NO_BANNER=1` for cron.
+```bash
+nenapu theme              # preview all five, marked with the active one
+nenapu theme violet       # switch, remembered in ~/.nenapu/config.json
+```
+
+`teal` · `violet` · `indigo` · `jade` · `mono`. `NENAPU_THEME` overrides for a
+single run without changing the saved choice; `NENAPU_NO_BANNER=1` silences the
+banner for cron and CI.
 
 ---
 

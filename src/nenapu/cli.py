@@ -539,6 +539,44 @@ def stats(scope: str = "", db: str = DB_OPT) -> None:
 
 
 @app.command(rich_help_panel=DIAGNOSE)
+def theme(
+    name: str = typer.Argument("", help="Theme to switch to; omit to see them all"),
+) -> None:
+    """Switch the banner colour, and remember the choice.
+
+    Saved to ~/.nenapu/config.json. `NENAPU_THEME` overrides it for a single
+    run, so a script can pin `mono` without disturbing your setting.
+    """
+    from .banner import HERO, THEMES, resolve_theme, write_config
+
+    if not name:
+        current = resolve_theme()
+        console.print()
+        for theme_name, shades in THEMES.items():
+            marker = "[bold]●[/]" if theme_name == current else " "
+            swatch = "".join(f"[{shade}]███[/]" for shade in shades)
+            console.print(f"  {marker} {theme_name:<8} {swatch}")
+        suffix = "  (from NENAPU_THEME)" if os.environ.get("NENAPU_THEME") else ""
+        console.print(f"\n  [dim]active: {current}{suffix}[/]")
+        console.print("  [dim]nenapu theme <name> to switch[/]\n")
+        return
+
+    key = name.lower()
+    if key not in THEMES:
+        raise typer.BadParameter(f"unknown theme {name!r}; try: {', '.join(THEMES)}")
+
+    write_config(theme=key)
+    shades = THEMES[key]
+    console.print()
+    for i, line in enumerate(HERO):
+        console.print(f"[{shades[i % len(shades)]}]{line}[/]")
+    console.print(f"\n  [green]theme set to {key}[/]")
+    if os.environ.get("NENAPU_THEME"):
+        console.print("  [yellow]NENAPU_THEME is set and overrides this[/]")
+    console.print()
+
+
+@app.command(rich_help_panel=DIAGNOSE)
 def doctor(
     calibrate_backend: bool = typer.Option(
         False, "--calibrate", help="Probe whether the model actually reads evidence"

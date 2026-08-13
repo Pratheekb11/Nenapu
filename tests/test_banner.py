@@ -136,3 +136,35 @@ def test_the_panel_reports_the_store(tmp_path):
     _run(["write", "a remembered thing"], tmp_path, NENAPU_NO_BANNER="1")
     result = _run(["version"], tmp_path, NENAPU_NO_BANNER="")
     assert "1 active" in result.stdout
+
+
+def test_theme_persists_across_runs(tmp_path):
+    """Switching a theme should stick, the way Hermes' skins do."""
+    home = tmp_path / "home"
+    env = {"NENAPU_HOME": str(home), "NENAPU_THEME": ""}
+
+    listed = _run(["theme"], tmp_path, **env)
+    assert "teal" in listed.stdout and "violet" in listed.stdout
+
+    assert _run(["theme", "violet"], tmp_path, **env).returncode == 0
+    assert "violet" in (home / "config.json").read_text()
+
+    again = _run(["theme"], tmp_path, **env)
+    assert "active: violet" in again.stdout
+
+
+def test_env_overrides_the_saved_theme_without_changing_it(tmp_path):
+    """A script pinning `mono` must not rewrite the user's preference."""
+    home = tmp_path / "home"
+    _run(["theme", "jade"], tmp_path, NENAPU_HOME=str(home), NENAPU_THEME="")
+
+    overridden = _run(["theme"], tmp_path, NENAPU_HOME=str(home), NENAPU_THEME="mono")
+    assert "active: mono" in overridden.stdout
+    assert "jade" in (home / "config.json").read_text(), "override rewrote the config"
+
+
+def test_unknown_theme_is_rejected(tmp_path):
+    result = _run(["theme", "chartreuse"], tmp_path,
+                  NENAPU_HOME=str(tmp_path / "home"), NENAPU_THEME="")
+    assert result.returncode != 0
+    assert "unknown theme" in (result.stdout + result.stderr)
