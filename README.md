@@ -109,11 +109,55 @@ with pointers to what replaced them and a journal of every action.
 ## Install
 
 ```bash
-uv tool install nenapu       # or: uvx --from nenapu nenapu
+uv tool install git+https://github.com/Pratheekb11/Nenapu    # or pipx, same URL
+uv tool install --editable .                               # from a clone
+nenapu                                                     # first run: sets it up
 ```
+
+The first bare `nenapu` walks you through setup and then shows a how-to guide.
+It does that once — after that a bare `nenapu` is just the command list, and
+`nenapu guide` brings the walkthrough back.
 
 Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
 it up.
+
+## It is a layer, not a tool call
+
+This is the part that matters, and it is where every other memory system
+stops. Memory an agent has to *ask* for is memory it will forget to ask for —
+and the agent that just got corrected is exactly the one least likely to stop
+and file a note about it.
+
+So Nenapu does not wait to be called. Two Claude Code hooks do the work:
+
+```
+   SessionStart  ──▶  nenapu recall-hook
+                        what you have learned is put into the session's
+                        context before the agent does anything
+
+   ( you work. you correct it. )
+
+   Stop          ──▶  nenapu observe --stdin --detach
+                        the finished transcript is read in the background,
+                        corrections and decisions extracted and stored
+```
+
+The agent never decides to remember. Next session it simply already knows.
+
+```
+  Previously corrected — do not repeat these:
+  - The user wants commits made without a Co-Authored-By trailer.
+  - The user prefers to only commit the specific files they name.
+
+  Do not rely on these — what they rested on was falsified:
+  - New endpoints go in services/auth/routes.py
+```
+
+`--detach` is not a flourish. Extraction is a model call over a whole session
+— 83 seconds against real transcripts here. A Stop hook that blocks for 83
+seconds is unusable, and one capped at 60 is killed before it writes anything,
+which is how a memory layer ends up looking like it works while learning
+nothing.
 
 ## Use
 
@@ -134,15 +178,22 @@ nenapu export ./CLAUDE.md    # materialize into a managed block
 
 Run `nenapu` alone for the full command list, grouped into five panels.
 
-## Wire into Claude Code / Cursor
+## Editors without a hook API
+
+Cursor, VS Code and Codex have no hook API, so there the memory has to be
+reachable as tools. `nenapu init` registers the MCP server for them and prints
+a rules block (`nenapu rules`) telling the agent to use it.
 
 ```bash
-claude mcp add nenapu -- nenapu-mcp
+claude mcp add nenapu -- nenapu-mcp     # also available on Claude Code
 ```
 
 Ten tools: `memory_search`, `memory_write`, `memory_why`, `memory_verify`,
 `memory_loops`, `task_outcome`, `memory_forget`, and the skill trio.
 `NENAPU_TOOLS=minimal|memory|full` trades surface for tokens.
+
+This is the weaker mode, and honestly so: it only fires when the agent decides
+to fire it. Hooks are the reason Nenapu works when nobody is cooperating.
 
 ## Executable checks are gated
 
@@ -169,7 +220,7 @@ Only two scheduled jobs call a model. Neither needs a cloud account.
 
 | `NENAPU_LLM` | what |
 |---|---|
-| `auto` (default) | Anthropic if credentials exist, else probes local servers |
+| `auto` (default) | Anthropic if credentials exist, else an agent CLI on PATH, else a local server |
 | `ollama` / `lmstudio` / `openai` | local, stdlib HTTP, no extra dependency |
 | `exec` | any CLI on stdin, e.g. `claude -p` — no second credential |
 | `anthropic` | Claude API |
@@ -188,6 +239,19 @@ whether the verdicts *change with the evidence*:
 
 A backend that fails is refused. Local backends are report-only unless you pass
 `--apply`.
+
+The ordering in `auto` is why `exec` sits above the local servers, and it was
+settled by measurement rather than by cost. Extraction sends about 6,000 tokens
+of conversation and asks for structured JSON back. Through `claude -p` that
+takes 83s; through the default local 3B on a CPU-only host it did not finish at
+all — 180s, twice. A backend that always times out is not the cheaper answer,
+it is no answer: the session ends and the store stays empty. The calibration
+table above says the same thing about quality.
+
+An agent CLI is itself a harness, so it fires its own `Stop` hook when it
+finishes — which is the hook that started the extraction. The extraction runs
+with `NENAPU_OBSERVING=1` and the hook stands down when it sees it, so the
+chain is one level deep rather than unbounded.
 
 ## Performance
 

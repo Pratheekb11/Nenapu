@@ -51,6 +51,117 @@ check, a contradiction, an explicit report from the harness, or a human. Two of
 the four need no cooperation from anything, which is why the loop closes even
 when nobody wires it up.
 
+## The agentic layer (`observer.py`, `setup_wizard.py`)
+
+The original surface was MCP. That was wrong, and the reason is worth writing
+down: **MCP is request/response, so the server only ever sees a tool call.** It
+cannot watch a conversation go past. Memory therefore gets written when the
+agent decides to write it — and the agent that has just been corrected is
+precisely the one least likely to stop and file a note about it. A memory layer
+built on that premise measures well and learns nothing.
+
+Claude Code hooks are the exception, and the whole design now rests on them:
+
+| hook | command | what it does |
+|---|---|---|
+| `SessionStart` | `nenapu recall-hook` | prints memory to stdout; the harness puts it in the model's context. The agent reads it without asking. |
+| `Stop` | `nenapu observe --stdin --detach` | reads the finished transcript, extracts corrections and decisions, writes them. |
+
+MCP is kept for Cursor/VS Code/Codex, which have no hook API. It is the weaker
+mode and the docs say so.
+
+### Three things real transcripts broke
+
+**A fixed tail read harvests almost nothing.** Transcripts here reach 55MB and
+are overwhelmingly tool traffic. A 400KB tail of a busy one yielded 2,400
+characters of actual conversation — a correction made twenty minutes earlier
+was simply invisible. The window now starts at 400KB and grows ×4 until enough
+real conversation has been harvested. Reading the whole file instead was the
+obvious fix and the wrong one: 187MB RSS in a hook that runs after every
+session. Seeking to the tail keeps it at 1MB.
+
+**The Stop hook was being killed before it finished.** Extraction is a model
+call over an entire session; measured through `claude -p` on real transcripts
+it takes **83 seconds**. The hook was configured with a 60-second timeout, so
+on any real session it was terminated and nothing was ever written. The failure
+is silent — the session ends normally and the store is simply empty. Hence
+`--detach`: the hook re-execs itself with `start_new_session=True` and returns
+in milliseconds, so the extraction outlives both the hook timeout and the
+teardown of the session's process group.
+
+**"Exited 1" with an empty reason.** Two of three real transcripts failed with
+`` `claude -p` exited 1: `` and nothing after the colon. Two bugs stacked: the
+error reported `stderr` only, and agent CLIs print their diagnostics on
+*stdout*. The same prompts then succeeded unchanged on a later attempt — they
+were transient upstream failures. Fixed in both directions: the reason now
+falls back to stdout, and the `exec` backend retries three times with
+exponential backoff. Timeouts are deliberately *not* retried; a command that
+ran out of time will run out of time again, and retrying only triples the wait
+for the same failure.
+
+### Suspect facts are injected below the confidence floor
+
+`recall_context` filters on believability — except for `suspect` facts, which
+are exempt on purpose. A suspect fact is penalised *because* its foundation
+fell, which pushes it under the floor and silences the warning exactly when it
+matters most. They are listed separately, under "do not rely on these", never
+mixed into what the agent is told it knows. Without this the falsification
+cascade would be visible in `nenapu loops` and invisible where decisions are
+actually made.
+
+### Consent
+
+`nenapu init` and the first-run walkthrough edit `~/.claude/settings.json` and
+editor MCP configs — files the user owns and may have hand-edited. Every write
+backs up first, merges rather than replaces, and is idempotent. A non-TTY run
+(a pipe, a CI job) is **not** consent: it prints what it would do and changes
+nothing. `--yes` exists so automation can opt in explicitly.
+
+### Three more things the first real install broke
+
+The hooks were wired, the tests were green, and the layer was still learning
+nothing. Each of these was found by running it, not by reading it.
+
+**An installed hook is a version too.** The `Stop` hook on this machine still
+read `nenapu observe --stdin` with a 60-second timeout — the exact
+silently-killed configuration `--detach` was written to fix. `install_hooks`
+matched on "does an entry mention nenapu" and skipped, so no upgrade would ever
+have repaired it. It now compares against the config it wants and replaces its
+own stale entries in place, leaving anyone else's hooks on the same event
+alone. A memory layer that cannot fix its own installation is a memory layer
+that stays broken quietly.
+
+**Ollama drops the front of a long prompt without saying so.** `ollama ps`
+reported `CONTEXT 4096` while a harvested session runs to 24,000 characters —
+roughly 8,000 tokens. Everything past the window is discarded server-side, and
+nothing in the response mentions it. What gets discarded is the *oldest* part
+of the conversation, which is where a correction usually is: the user objects,
+then the work goes on for another twenty minutes. `num_ctx` is now sized to the
+prompt, rounded to a power of two, capped at 16,384.
+
+**`auto` never considered the CLI already installed on the machine.** It went
+straight to the local 3B, which on a CPU-only host did not finish an extraction
+at all — 180s, twice, on transcripts of 20,000 and 24,000 characters. The same
+prompt through `claude -p` takes 83s. `auto` now prefers the `exec` backend
+when its command is on PATH, and refuses to auto-select anything containing a
+shell operator: picking up a CLI someone installed is reasonable, deciding to
+run a pipeline is not. On the transcript that previously extracted nothing, the
+new default extracted twelve facts.
+
+### The recursion that preferring an agent CLI creates
+
+An agent CLI is a harness. It fires its own `Stop` hook when it finishes, and
+our `Stop` hook is what started it — so an extraction through `claude -p` would
+start another extraction, forever. This was measured, not assumed: a bare
+`claude -p "reply with exactly: ok"` wrote to `~/.nenapu/observe.log`.
+
+The extraction carries `NENAPU_OBSERVING=1`, and the **hook path only** stands
+down when it sees it. Guarding the whole command instead was the first attempt
+and was wrong in the way that matters: the detached child is invoked with a
+plain path argument and is itself the extraction, so refusing it meant never
+observing anything at all. The test suite caught that within a minute, which is
+the argument for the test existing.
+
 ## Decisions that came from measurement
 
 Each of these was wrong on first attempt. The measurement is recorded because

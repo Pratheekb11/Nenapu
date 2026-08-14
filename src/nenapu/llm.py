@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -73,6 +74,15 @@ DEFAULT_MODELS = {
 # writes the reply to stdout.
 EXEC_COMMAND = os.environ.get("NENAPU_LLM_CMD", "claude -p")
 
+# Retries for the `exec` backend. Nothing here is idempotency-sensitive — the
+# call is a read that produces JSON — so retrying is safe.
+EXEC_ATTEMPTS = int(os.environ.get("NENAPU_LLM_ATTEMPTS", "3"))
+
+# Ceiling on the context window we will ask Ollama for. Past this the KV cache
+# costs more memory than a background pass has any business taking.
+MAX_NUM_CTX = int(os.environ.get("NENAPU_NUM_CTX_MAX", "16384"))
+EXEC_BACKOFF = 2.0
+
 
 class LLMUnavailable(RuntimeError):
     pass
@@ -112,20 +122,47 @@ def _exec_backend(prompt: str, schema: dict, system: str | None, backend: Backen
         "\n\nReply with a single JSON object matching this schema, and nothing "
         f"else — no prose, no code fences:\n{json.dumps(schema)}"
     )
-    try:
-        proc = subprocess.run(
-            backend.model, shell=True, input=instruction, capture_output=True,
-            text=True, timeout=DEFAULT_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise LLMUnavailable(
-            f"`{backend.model}` did not finish within {DEFAULT_TIMEOUT}s"
-        ) from exc
-    if proc.returncode != 0:
-        raise LLMUnavailable(
-            f"`{backend.model}` exited {proc.returncode}: {proc.stderr.strip()[:200]}"
-        )
-    return extract_json(proc.stdout)
+    # An agent CLI is a network client behind a process boundary. Rate limits,
+    # a dropped connection and an overloaded upstream all arrive here as the
+    # same thing: a non-zero exit. Three identical prompts that failed this way
+    # all succeeded unchanged on a later attempt, so a single try turns a
+    # transient into a permanent "cannot observe".
+    last = ""
+    for attempt in range(EXEC_ATTEMPTS):
+        try:
+            proc = subprocess.run(
+                backend.model, shell=True, input=instruction, capture_output=True,
+                text=True, timeout=DEFAULT_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise LLMUnavailable(
+                f"`{backend.model}` did not finish within {DEFAULT_TIMEOUT}s"
+            ) from exc
+        if proc.returncode == 0:
+            return extract_json(proc.stdout)
+        # Agent CLIs routinely print their diagnostics on stdout and leave
+        # stderr empty. Reporting stderr alone produced `exited 1: ` with
+        # nothing after the colon, which is the least useful error possible.
+        last = (proc.stderr.strip() or proc.stdout.strip() or "no output")[:300]
+        if attempt + 1 < EXEC_ATTEMPTS:
+            time.sleep(EXEC_BACKOFF * (2 ** attempt))
+    raise LLMUnavailable(
+        f"`{backend.model}` exited {proc.returncode} after {EXEC_ATTEMPTS} attempts: {last}"
+    )
+
+
+def _exec_available() -> bool:
+    """Whether the configured agent CLI is actually on PATH.
+
+    Only the program name is checked — the rest of `EXEC_COMMAND` is flags. A
+    command with a shell operator in it is never auto-selected: `auto` should
+    not be the thing that decides to run a pipeline, only a plain CLI someone
+    already installed and signed into.
+    """
+    command = EXEC_COMMAND.strip()
+    if not command or any(ch in command for ch in "|&;<>$`"):
+        return False
+    return shutil.which(command.split()[0]) is not None
 
 
 def _probe(url: str, path: str, timeout: float = 1.5) -> bool:
@@ -164,6 +201,15 @@ def detect_backend() -> Backend:
 
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"):
         return build("anthropic")
+    if _exec_available():
+        # Preferred over a local server, and the ordering was decided by
+        # measurement rather than taste. Extraction sends ~6k tokens of
+        # conversation and asks for structured JSON back. Through `claude -p`
+        # that takes 83s. Through the default local 3B on a CPU-only host it
+        # did not finish at all: 180s, twice, on transcripts of 20k and 24k
+        # characters. A backend that always times out is not a cheaper answer,
+        # it is no answer — the session ends and the store stays empty.
+        return build("exec")
     if _probe(url or BACKEND_URLS["ollama"], "/api/tags"):
         return build("ollama")
     if _probe(url or BACKEND_URLS["lmstudio"], "/models"):
@@ -280,6 +326,21 @@ def _anthropic(prompt: str, schema: dict, system: str | None, backend: Backend,
     return extract_json(text)
 
 
+def _num_ctx(messages: list[dict], max_tokens: int) -> int:
+    """Size the context window to the prompt instead of taking Ollama's default.
+
+    Ollama defaults to 4096 tokens and, when the prompt is longer, **silently
+    drops the front of it**. A harvested session runs to 24,000 characters —
+    comfortably past that — so the oldest part of the conversation was being
+    discarded by the server without a word. That is the part where a correction
+    usually is: the user objects, then the work continues for another twenty
+    minutes. Nothing in the response says this happened.
+    """
+    chars = sum(len(m["content"]) for m in messages)
+    needed = chars // 3 + max_tokens + 512  # ~3 chars/token, then headroom
+    return max(4096, min(1 << (needed - 1).bit_length(), MAX_NUM_CTX))
+
+
 def _ollama(prompt: str, schema: dict, system: str | None, backend: Backend,
             max_tokens: int) -> dict:
     """Ollama's native endpoint takes a JSON schema in `format` directly.
@@ -301,7 +362,8 @@ def _ollama(prompt: str, schema: dict, system: str | None, backend: Backend,
             "messages": messages,
             "stream": True,
             "format": schema,
-            "options": {"num_predict": max_tokens, **DECODING},
+            "options": {"num_predict": max_tokens, "num_ctx": _num_ctx(messages, max_tokens),
+                        **DECODING},
         }).encode(),
         headers={"Content-Type": "application/json"},
     )

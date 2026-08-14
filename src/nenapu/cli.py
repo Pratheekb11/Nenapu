@@ -51,7 +51,7 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _big_panel(console_out, db: str | None = None) -> None:
+def _big_panel(console_out, db: str | None = None, store=None) -> None:
     """Dog plus a readout of the store. Opening the store is worth it here —
     someone asking for this view wants to see the state of their memory."""
     from .banner import panel
@@ -59,7 +59,8 @@ def _big_panel(console_out, db: str | None = None) -> None:
 
     conn = path = None
     try:
-        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        if store is None:
+            store, _ = open_store(db or os.environ.get("NENAPU_DB"))
         conn = store.conn
         path = store.conn.execute("PRAGMA database_list").fetchone()[2]
     except Exception:  # noqa: BLE001 — a banner must never break the command
@@ -83,19 +84,36 @@ def main(ctx: typer.Context) -> None:
     the third command. Both go to stderr, so `--json | jq` still pipes clean
     data. `NENAPU_NO_BANNER=1` silences it for cron and CI.
     """
-    from .banner import stamp
+    from .banner import should_walk, stamp
 
     quiet = bool(os.environ.get("NENAPU_NO_BANNER"))
 
     if ctx.invoked_subcommand is None:
+        store = None
+        try:
+            store, _ = open_store(os.environ.get("NENAPU_DB"))
+        except Exception:  # noqa: BLE001 — never fail on the greeting path
+            pass
         if not quiet:
-            _big_panel(console)
+            _big_panel(console, store=store)
+
+        # The very first bare `nenapu` is someone who just installed it. Wire
+        # it up and explain it once; after that a bare invocation is someone
+        # looking for a command name, and a wizard would be in the way.
+        if store is not None and not quiet and should_walk(store.conn):
+            _setup_walkthrough(console)
+            _usage_guide(console)
+            raise typer.Exit(0)
+
         # A bare `nenapu` is someone looking around, not a usage error — so
         # show the commands and exit clean, rather than Typer's exit code 2.
         console.print(ctx.get_help())
         raise typer.Exit(0)
 
-    if not quiet and ctx.invoked_subcommand != "version":
+    # Hooks are machine-to-machine. `recall-hook` writes into a session's
+    # context and `observe` runs headless after one ends; a mark on either is
+    # noise in a log at best and content in a prompt at worst.
+    if not quiet and ctx.invoked_subcommand not in ("version", "recall-hook", "observe"):
         err_console.print(stamp(__version__))
 
 
@@ -536,6 +554,310 @@ def stats(scope: str = "", db: str = DB_OPT) -> None:
     for key, value in s.items():
         table.add_row(key, json.dumps(value) if isinstance(value, dict) else str(value))
     console.print(table)
+
+
+@app.command(rich_help_panel=UPKEEP, hidden=True)
+def recall_hook(db: str = DB_OPT) -> None:
+    """Emit memory for a starting session. Wired to Claude Code's SessionStart.
+
+    Prints to stdout, which the hook feeds into the model's context — so the
+    agent reads it without having to ask for it.
+    """
+    from .observer import recall_context
+
+    try:
+        # Deliberately not `_stores`: that fires the one-time greeting, and a
+        # hook running before the user has typed anything would spend it on
+        # nobody.
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        text = recall_context(store)
+    except Exception:  # noqa: BLE001 — a hook must never break the session
+        raise typer.Exit(0)
+    if text:
+        print(text)
+
+
+def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
+    """Spawn a fully detached `nenapu observe` and do not wait for it.
+
+    `start_new_session` puts the child in its own process group, so the
+    harness tearing down the session's process tree does not take the
+    extraction with it. Output goes to a log rather than to the pipe the hook
+    is being read on, because a hook that prints after it has returned
+    corrupts whatever is reading it.
+    """
+    import subprocess
+
+    log_dir = Path(db).expanduser().parent if db else Path("~/.nenapu").expanduser()
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = open(log_dir / "observe.log", "a")
+    except OSError:
+        log = subprocess.DEVNULL
+
+    # `sys.argv[0]` is the installed entry point when a hook invoked us, but it
+    # is a source path under `python -m nenapu.cli`, which the child cannot
+    # exec. Resolve the real console script, and fall back to the interpreter
+    # we are already running under.
+    import shutil
+
+    entry = shutil.which("nenapu")
+    argv = ([entry] if entry else [sys.executable, "-m", "nenapu.cli"]) + ["observe", path]
+    if db:
+        argv += ["--db", db]
+    env = dict(os.environ, NENAPU_NO_BANNER="1", NENAPU_OBSERVING="1")
+    if session_id:
+        env["NENAPU_SESSION_ID"] = session_id
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                         start_new_session=True, env=env)
+    except OSError:
+        pass  # a hook must never break the session it is attached to
+
+
+@app.command(rich_help_panel=UPKEEP)
+def observe(
+    transcript: str = typer.Argument("", help="Transcript to read; omit with --stdin"),
+    from_stdin: bool = typer.Option(False, "--stdin", help="Read the hook payload on stdin"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be stored"),
+    detach: bool = typer.Option(False, "--detach",
+                                help="Hand the work to a background process and return"),
+    db: str = DB_OPT,
+) -> None:
+    """Learn from a finished session without being asked.
+
+    Reads the transcript, extracts corrections, decisions and environment facts,
+    and stores them. Wired to Claude Code's Stop hook, this is what makes the
+    layer passive: the agent never has to decide to record anything.
+    """
+    from .observer import hook_payload, observe_transcript
+
+    session_id = None
+    path = transcript
+    if from_stdin:
+        if os.environ.get("NENAPU_OBSERVING"):
+            # A hook is firing *inside* an extraction. When the model backend
+            # is an agent CLI, that CLI is a harness in its own right and fires
+            # its own Stop hook when it finishes — which would start another
+            # extraction, which would start another CLI. Measured: `claude -p`
+            # does fire Stop. The extraction carries this marker in its
+            # environment, so the inner hook stops here and the chain is one
+            # level deep instead of unbounded. Only the hook path is guarded:
+            # the extraction itself is invoked with a plain path argument, and
+            # refusing that would mean never observing anything at all.
+            raise typer.Exit(0)
+        payload = hook_payload(sys.stdin.read())
+        path = payload.get("transcript_path", "")
+        session_id = payload.get("session_id")
+    if not path:
+        if from_stdin:
+            raise typer.Exit(0)  # a hook with no transcript is not an error
+        raise typer.BadParameter("no transcript path (pass one, or --stdin from a hook)")
+
+    if detach:
+        # Extraction is a model call over an entire session — 83s against real
+        # transcripts. Hooks are killed at their timeout, so doing the work
+        # inline means the work never finishes. Re-exec ourselves detached,
+        # with the payload already resolved into arguments so the child needs
+        # no stdin, and return before anything is waiting on us.
+        _detach_observe(path, session_id, db)
+        raise typer.Exit(0)
+
+    try:
+        # The detached child has no terminal to greet; opening plainly keeps
+        # the first-run orientation for the run where a person is watching.
+        store, _ = (open_store(db or os.environ.get("NENAPU_DB")) if from_stdin
+                    else _stores(db))
+        learned = observe_transcript(
+            store, Path(path),
+            session_id=session_id or os.environ.get("NENAPU_SESSION_ID"),
+            apply=not dry_run,
+        )
+    except LLMUnavailable as exc:
+        if from_stdin:
+            raise typer.Exit(0)  # never break a session over a missing model
+        console.print(f"[red]cannot observe:[/] {exc}")
+        raise typer.Exit(1)
+    except Exception as exc:  # noqa: BLE001
+        if from_stdin:
+            raise typer.Exit(0)
+        console.print(f"[red]observe failed:[/] {exc}")
+        raise typer.Exit(1)
+
+    if from_stdin:
+        raise typer.Exit(0)  # quiet in a hook
+    if not learned:
+        console.print("[dim]nothing durable to learn from that session[/]")
+        return
+    for fact in learned:
+        marker = "[yellow]correction[/]" if fact.kind == "feedback" else fact.kind
+        console.print(f"  {marker:<22} {fact.text[:70]}")
+    console.print(f"\n{len(learned)} fact(s) {'would be ' if dry_run else ''}remembered")
+
+
+def _setup_walkthrough(console_out, *, yes: bool = False) -> None:
+    """Wire Nenapu into whatever agent is actually on this machine.
+
+    Memory an agent has to *ask* for is memory it will forget to ask for. So
+    the wiring installed here is not a tool the agent may call — it is a pair
+    of hooks: one that puts what you have learned into the session before the
+    agent starts, and one that reads the finished session and records what it
+    taught.
+    """
+    from .setup_wizard import (
+        CLIENT_CONFIGS, detected, install_hooks, wire_claude_code, wire_json_client,
+    )
+
+    found = detected()
+    if not found:
+        console_out.print("  [yellow]No supported agent found on this machine.[/]")
+        console_out.print("  [dim]Nenapu still works standalone: nenapu write / search.[/]\n")
+        return
+
+    console_out.print("  [bold]Found on this machine[/]\n")
+    for target in found:
+        tag = "[green]agent[/]" if target.kind == "mcp" else "[dim]model host[/]"
+        console_out.print(f"    {target.label:<14} {tag}  [dim]{target.note}[/]")
+    console_out.print()
+
+    hosts = [t for t in found if t.kind == "mcp"]
+    if not hosts:
+        console_out.print("  [yellow]Only model hosts found — nothing to attach memory to.[/]")
+        console_out.print("  [dim]Ollama and LM Studio serve models; they are not plugin hosts."
+                          " Nenapu will use one for its audit pass.[/]\n")
+        return
+
+    claude = next((t for t in hosts if t.key == "claude"), None)
+    if claude:
+        console_out.print("  [bold]Claude Code — the observing layer[/]\n")
+        # Never edit someone's settings.json without being asked. A bare
+        # `nenapu` in a pipe or a CI job is not consent, and `--yes` exists so
+        # a script can say so explicitly.
+        agreed = yes or (sys.stdin.isatty() and typer.confirm(
+            "    Install hooks so memory is injected and learned automatically?",
+            default=True,
+        ))
+        if agreed:
+            ok, detail = install_hooks()
+            console_out.print(f"    {'[green]✓[/]' if ok else '[red]✗[/]'} hooks — {detail}")
+            ok, detail = wire_claude_code()
+            console_out.print(f"    {'[green]✓[/]' if ok else '[dim]·[/]'} tools — {detail}"
+                              "  [dim](optional; the hooks do the work)[/]")
+        else:
+            console_out.print("    [dim]not wired. `nenapu init --yes` when you want"
+                              " it.[/]")
+        console_out.print()
+
+    others = [t for t in hosts if t.key != "claude"]
+    if others:
+        console_out.print("  [bold]Other editors[/]  [dim]no hook API — tools + a rules"
+                          " block[/]\n")
+        for target in others:
+            path = CLIENT_CONFIGS.get(target.key)
+            if not path:
+                continue
+            if not (yes or sys.stdin.isatty()):
+                console_out.print(f"    [dim]·[/] {target.label} — would add to {path}")
+                continue
+            ok, detail = wire_json_client(path)
+            console_out.print(
+                f"    {'[green]✓[/]' if ok else '[red]✗[/]'} {target.label} — {detail}")
+        console_out.print("\n    [dim]Paste into your agent's rules so it writes memory"
+                          " too:[/]")
+        console_out.print("    [dim]./AGENTS.md — see `nenapu rules`[/]")
+        console_out.print()
+
+
+# The first-run guide. Four beats, in the order someone actually meets them:
+# what happens on its own, what to type, what to do when it is wrong, and how
+# to see inside. Shown once and then never again — `nenapu guide` brings it
+# back, which is cheaper than making someone regret pressing enter.
+GUIDE = [
+    ("What happens without you", [
+        ("a session starts", "memory goes into its context"),
+        ("you correct it", "the correction is recorded at the end"),
+        ("next session", "it knows, and does not repeat it"),
+    ]),
+    ("What you type", [
+        ("nenapu list", "everything it has learned"),
+        ("nenapu search \"port\"", "recall, by match and by belief"),
+        ("nenapu write \"...\"", "tell it something yourself"),
+    ]),
+    ("When a memory is wrong", [
+        ("nenapu forget <id>", "retire one; nothing is deleted"),
+        ("nenapu loops", "what it no longer stands behind"),
+        ("nenapu why <id>", "what it rests on, and rests on it"),
+    ]),
+    ("Checking on it", [
+        ("nenapu observe <file> --dry-run", "what it would learn"),
+        ("nenapu doctor --calibrate", "prove the model can audit"),
+        ("nenapu approve", "no check runs until you say so"),
+    ]),
+]
+
+# Widest left-hand cell, so the two columns line up across all four sections
+# without any of them having to be padded by hand.
+_GUIDE_WIDTH = max(len(left) for _, rows in GUIDE for left, _ in rows)
+
+
+def _usage_guide(console_out) -> None:
+    """The how-to-use half of the first run.
+
+    Laid out as a grid rather than padded f-strings: at 80 columns a fixed
+    pad puts the right-hand column past the edge and Rich wraps it under the
+    left one, which looks like a bug.
+    """
+    from rich.table import Table
+
+    for heading, rows in GUIDE:
+        console_out.print(f"  [bold]{heading}[/]\n")
+        grid = Table.grid(padding=(0, 2))
+        grid.add_column(no_wrap=True, width=_GUIDE_WIDTH + 2)
+        grid.add_column(overflow="fold")
+        for left, right in rows:
+            grid.add_row(f"  [cyan]{left}[/]", f"[dim]{right}[/]")
+        console_out.print(grid)
+        console_out.print()
+    console_out.print("  [dim]Shown once. `nenapu guide` brings it back,"
+                      " `nenapu init` re-runs setup.[/]\n")
+
+
+@app.command(rich_help_panel=DIAGNOSE)
+def init(
+    yes: bool = typer.Option(False, "--yes", help="Accept the detected defaults"),
+    db: str = DB_OPT,
+) -> None:
+    """Set Nenapu up as a layer over the agent you already use."""
+    from .banner import mark_walked
+
+    store = None
+    try:
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    _big_panel(console, db, store=store)
+    _setup_walkthrough(console, yes=yes)
+    _usage_guide(console)
+    if store is not None:
+        # Someone who ran setup by hand should not be walked through it again
+        # the next time they type a bare `nenapu`.
+        mark_walked(store.conn)
+
+
+@app.command(rich_help_panel=DIAGNOSE)
+def guide() -> None:
+    """Show the first-run how-to guide again."""
+    console.print()
+    _usage_guide(console)
+
+
+@app.command(rich_help_panel=DIAGNOSE)
+def rules() -> None:
+    """Print the rules block for agents that have no hook API."""
+    from .setup_wizard import AGENT_RULES
+
+    print(AGENT_RULES)
 
 
 @app.command(rich_help_panel=DIAGNOSE)

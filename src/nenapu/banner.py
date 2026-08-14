@@ -256,16 +256,37 @@ def _shorten(path: str, limit: int = 30) -> str:
 
 
 GREETED_KEY = "greeted"
+WALKED_KEY = "walkthrough"
+
+
+def _claim(conn: sqlite3.Connection, key: str) -> bool:
+    """True exactly once per store, and never again after that."""
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    if row:
+        return False
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')", (key,))
+    conn.commit()
+    return True
 
 
 def should_greet(conn: sqlite3.Connection) -> bool:
-    """True exactly once per store, on the run that created it."""
-    row = conn.execute("SELECT value FROM meta WHERE key = ?", (GREETED_KEY,)).fetchone()
-    if row:
-        return False
-    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')", (GREETED_KEY,))
+    """The short orientation under a subcommand's first run."""
+    return _claim(conn, GREETED_KEY)
+
+
+def should_walk(conn: sqlite3.Connection) -> bool:
+    """The full setup walkthrough, shown on the first bare `nenapu`.
+
+    Claimed rather than merely read, so a second terminal starting at the same
+    moment does not run two wizards over one settings file.
+    """
+    return _claim(conn, WALKED_KEY)
+
+
+def mark_walked(conn: sqlite3.Connection) -> None:
+    """Record that the walkthrough has been seen — `nenapu init` counts."""
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, '1')", (WALKED_KEY,))
     conn.commit()
-    return True
 
 
 FIRST_RUN_HELP = """   Your store lives at {path}
