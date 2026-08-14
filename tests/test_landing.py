@@ -14,10 +14,19 @@ from nenapu import connect, open_store
 from nenapu.models import Fact, Kind, Origin
 from nenapu.store import Store
 
+BRAILLE = {chr(c) for c in range(0x2800, 0x2900)} - {chr(0x2800)}
+
+
 def drawing_rows(lines):
     """Rows that are part of the dog rather than part of the text beside it."""
-    return [line for line in lines if ",__," in line or "'-._" in line
-            or "▾" in line]
+    return [line for line in lines if BRAILLE & set(line)]
+
+
+def drawing_width(lines):
+    """How many columns the drawing occupies, including its blank braille."""
+    return max((max(i for i, ch in enumerate(line)
+                    if ch in BRAILLE or ch == chr(0x2800)) + 1
+                for line in drawing_rows(lines)), default=0)
 
 
 def render(width: int, height: int, store=None) -> list[str]:
@@ -69,7 +78,7 @@ def test_a_wide_terminal_puts_the_dog_beside_the_readout(store):
     drawn = drawing_rows(lines)
 
     assert drawn, "no drawing on a wide terminal"
-    edge = max(line.rindex("'-.") + 3 for line in lines if "'-._" in line)
+    edge = drawing_width(lines)
     assert any(line[edge:].strip() for line in drawn), \
         "text should sit on the same rows as the dog, not below it"
 
@@ -148,14 +157,16 @@ def test_a_tall_terminal_is_not_mostly_empty(width, height, store):
     assert used >= height * 0.7, f"only {used} of {height} rows used"
 
 
-def test_the_dog_widens_with_the_room(store):
-    """It is seven rows tall by construction, so width is the only way it
-    grows. Rows it cannot use go to what the store has learned instead."""
-    from nenapu.pet_art import draw
+def test_the_dog_grows_with_the_room(store):
+    """The art is baked at three widths and the drawing picks among them,
+    rather than resizing one of them — reducing a reduction is what made the
+    earlier versions look like bad photocopies."""
+    from nenapu.pet_art import SIZES, draw
 
-    small, large = draw("content"), draw("content", scale=1.6)
+    small, large = draw("content"), draw("content", scale=1.7)
 
-    assert len(large) == len(small) == 7
+    assert len(SIZES) >= 2
+    assert len(large) > len(small)
     assert max(len(r) for r in large) > max(len(r) for r in small)
 
 
@@ -170,8 +181,7 @@ def test_the_dog_is_capped_by_width_not_only_height(store):
 
     for width in (96, 100, 110, 120):
         lines = render(width, 44, store)
-        drawn = max((line.rindex("'-.") + 3 for line in lines if "'-._" in line),
-                    default=0)
+        drawn = drawing_width(lines)
         assert width - drawn >= cli.MIN_TEXT_COLUMN, \
             f"at {width} columns the drawing left only {width - drawn} for the text"
 

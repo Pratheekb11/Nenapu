@@ -158,6 +158,26 @@ def _first_that_fits(candidates, rows: int):
     return candidates[-1]
 
 
+def _grown(build, frame, budget: int):
+    """Add facts until the screen is full, keeping the last version that fits.
+
+    Grown one at a time and measured rather than calculated from the leftover
+    rows: the drawing can be taller than the column beside it, in which case
+    the first few facts cost no height at all, and arithmetic that assumed
+    otherwise left a quarter of the screen empty.
+    """
+    best = frame
+    for count in range(1, 41):
+        candidate = build(count)
+        height = _height(console, candidate)
+        if height > budget:
+            break
+        if height == _height(console, best) and count > 12:
+            break          # the store has run out of facts to show
+        best = candidate
+    return best
+
+
 def _command_groups(with_help: bool = False) -> dict[str, list[tuple[str, str]]]:
     """Commands by the panel they belong to, straight from the app's registry.
 
@@ -341,27 +361,16 @@ def _landing(store):
                 break
         for header in (True, False):
             frame = side_by_side(scale, False, 0, header)
-            spare = rows - 2 - _height(console, frame)
-            # Two of the spare rows go to the heading and the blank line under
-            # the list, so anything under three buys nothing.
-            if spare >= 3:
-                filled = side_by_side(scale, False, spare - 2, header)
-                if _height(console, filled) <= rows - 2:
-                    return filled
             if _height(console, frame) <= rows - 2:
-                return frame
+                return _grown(lambda n: side_by_side(scale, False, n, header),
+                              frame, rows - 2)
 
     # Stacked, for terminals too narrow to put anything beside anything else.
     # Same trick: measure the frame, then fill what is left with facts.
     for art in (True, False):
         frame = stacked(art, True)
-        spare = rows - 2 - _height(console, frame)
-        if spare >= 3:
-            filled = stacked(art, True, spare - 2)
-            if _height(console, filled) <= rows - 2:
-                return filled
         if _height(console, frame) <= rows - 2:
-            return frame
+            return _grown(lambda n: stacked(art, True, n), frame, rows - 2)
     return _first_that_fits([stacked(False, True), stacked(False, False)], rows - 2)
 
 

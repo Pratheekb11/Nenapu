@@ -1,0 +1,14 @@
+Nenapu — third-party attributions
+=================================
+
+The pet's shape is derived from the dog-face glyph of Noto Emoji, rendered and
+reduced to braille by tools/render_pet.py. The generated rows live in
+src/nenapu/pet_art.py; no font file is bundled or required at runtime.
+
+    Noto Emoji
+    Copyright 2013 Google Inc.
+    Licensed under the SIL Open Font License, Version 1.1
+    https://openfontlicense.org
+    https://github.com/googlefonts/noto-emoji
+
+Everything else in this repository is MIT licensed — see LICENSE.

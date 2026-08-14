@@ -195,13 +195,17 @@ week.
 ```
 $ nenapu pet
 
-    ,__,                  ,__,     sick   1 thing it believed stopped being true
-   /    \________________/    \
-  |        __       __         |   12 facts, 3 learned today
-  |         ✕       ✕          |   last fed just now, observed a session 14m ago
-  |             ▾              |   a check that used to pass is failing — nenapu loops
-   \           (··)           /
-   '-.______________________.-'
+⠀⢀⣤⣶⣶⣶⣶⣦⡴⠶⠛⠛⠛⠛⠛⠛⠶⢦⣴⣶⣶⣶⣶⣤⡀⠀
+⣴⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣦
+⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿   sick   1 thing it believed stopped being true
+⣿⣿⣿⣿⣿⣿⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⢤⣽⣿⣿⣿⣿⣿⣿
+⢹⣿⣿⣿⣿⡿⢁⣄⠀⠀⣠⠀⠀⠀⠀⣄⠀⠀⣠⡈⢿⣿⣿⣿⣿⡏   12 facts, 3 learned today
+⠘⣿⣿⣿⣿⠇⠀⠙⣷⣾⠋⠀⠀⠀⠀⠙⣷⣾⠋⠀⢸⣿⣿⣿⣿⠃   last fed just now, observed a session 14m ago
+⠀⠈⠛⢿⡏⠀⠀⠾⠋⠙⠷⠀⣀⣀⠀⠾⠋⠙⠷⠀⠘⢹⡿⠛⠁⠀   a check that used to pass is failing — nenapu loops
+⠀⠀⠀⠈⣷⠀⠀⠀⠀⠀⠀⠘⢿⡿⠃⠀⠀⠀⠀⠀⠀⣾⠁⠀⠀⠀
+⠀⠀⠀⠀⠘⣧⠀⠀⠀⠘⠳⢿⣿⣷⡿⠞⠃⠀⠀⠀⣼⠃⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠈⠳⣄⡀⠀⠀⠘⢿⡿⠃⠀⠀⢀⣠⠞⠁⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠈⠛⠶⢦⣤⣤⣤⣤⡴⠶⠛⠁⠀⠀⠀⠀⠀⠀⠀
 ```
 
 Every mood is a real signal with a threshold you can argue with. Hungry because
@@ -215,17 +219,16 @@ worth having: a cosmetic pet teaches you to ignore it. An unwell dog is not
 drawn in your theme colour either — a calm teal dog with its eyes crossed still
 reads as fine at a glance.
 
-The dog went through three braille-bitmap versions before this one. Braille
-packs 2x4 dots per cell, which sounds like plenty of resolution and is not:
-every curve lands on a different dot pattern, so a smooth outline arrives as a
-row of unrelated glyphs and the whole thing reads as a bad photocopy. Ordinary
-characters have far less resolution and look better, because they were drawn by
-a type designer — a `/` is a clean diagonal at any size.
+Four hand-drawn versions came before this one and all of them looked homemade.
+Art that reads as a logo is not drawn at the resolution it will be shown at —
+it is drawn large, by someone who can draw, and then reduced, because the
+reduction is what makes an edge come out smooth instead of as a staircase.
 
-So the dog is set out of well-drawn pieces, and only the arithmetic that keeps
-the frame aligned is generated: every row places its characters at computed
-columns, so a mood needing a wider mouth cannot shift the right edge by a
-column. A mood is two eyes, a mouth, and eyebrows when something is wrong.
+So the shape is the Noto Emoji dog face rendered at 400px, given a different
+expression per mood, and reduced to braille by `tools/render_pet.py`. The rows
+are baked into the source: Pillow and the font are needed to regenerate the
+art, never to run Nenapu. The head, ears and snout never change with the mood —
+that is the part worth having from a typeface — and only the eyes and mouth do.
 
 ```bash
 nenapu pet --watch      # stays open, blinks, picks up writes from other terminals

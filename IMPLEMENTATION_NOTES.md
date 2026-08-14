@@ -298,39 +298,38 @@ surface (operator jobs live in the CLI, never registered as tools), lean recall
 results that omit predictable fields, and a test asserting the surface stays
 under budget.
 
-## The pet: four compositions, two techniques
+## The pet: five versions, and the one lesson worth keeping
 
-Three braille-bitmap versions came first — a filled silhouette, then chibi
-proportions, then outlines with the eyes as the only filled shapes — and the
-verdicts were "looks pirated" and "still ugly". Both were right, and the reason
-was the medium rather than the geometry.
+Four were hand-drawn and every one looked homemade: three braille bitmaps
+plotted dot by dot (a filled silhouette, chibi proportions, then outlines with
+the eyes as the only filled shapes), then line art set in ordinary characters.
+The verdicts were "looks pirated", "still ugly" and "very very bad", and all
+three were fair.
 
-**Braille has more resolution than characters and looks worse.** 2x4 dots per
-cell sounds like plenty. But every curve lands on a different dot pattern, so a
-smooth outline arrives as a row of unrelated glyphs — `⣠⣴⣾⠿` — and reads as
-something photocopied badly. Ordinary characters carry far less information per
-cell and look far better, because each one was drawn by a type designer: a `/`
-is a clean diagonal at every size, and the braille approximation of the same
-diagonal is a staircase.
+**The lesson is about resolution, not about geometry.** Art that reads as a
+logo is not drawn at the resolution it will be displayed at. It is drawn large,
+by someone who can draw, and then *reduced* — and the reduction is where the
+quality comes from, because averaging and thresholding a big smooth curve
+produces a clean edge, while plotting the same curve directly onto a 2x4 dot
+grid produces a staircase of unrelated glyphs. Every hand-plotted version was
+fighting that and losing.
 
-So the dog is now set out of well-drawn pieces, and the only thing generated is
-the arithmetic that keeps it aligned. Every row places its characters at
-computed columns rather than being typed as a literal — a hand-typed frame
-drifts the moment one mood needs a wider mouth than another, and a drawing
-whose right edge wobbles by a column is exactly what looked cheap about the
-earlier attempts. There is a test that the head's walls land on the same column
-in every mood.
+So the shape now comes from the Noto Emoji dog face: rendered at 400px, given a
+different expression per mood by wiping and redrawing the eyes and mouth, and
+reduced to a braille grid at three widths by `tools/render_pet.py`. The output
+is baked into `pet_art.py` as text, so Pillow and the font are build-time only.
+Nothing is resized at runtime either — reducing a reduction is the same mistake
+one step later.
 
-What survived all four versions: the moods, their priority order, the colour
+What survived all five versions: the moods, their priority order, the colour
 override when something is wrong, the blink, and the layout around it. Only the
-drawing was ever thrown away, which is the argument for keeping the readout and
-the picture separate.
+drawing was ever thrown away, which is the argument for having kept the readout
+and the picture separate from the start.
 
-**Escaping the rows is not a precaution.** The ear row ends in a backslash, and
-in Rich markup a trailing backslash escapes what follows — so the closing tag
-was swallowed and a literal `[/]` printed itself at the start of the next line,
-shoving the whole drawing a column sideways. It was invisible until a test
-looked at the rendered text rather than at the drawing.
+**Escaping the rows is not a precaution.** A row ending in a backslash escapes
+the closing markup tag, so a literal `[/]` printed itself at the start of the
+next line and shoved the whole drawing a column sideways. It was invisible
+until a test looked at rendered text rather than at the drawing.
 
 ## The landing view is measured, not guessed
 
@@ -364,10 +363,12 @@ bought with the text that says what the thing actually knows.
 
 A ladder of fixed sizes was still not enough — it lands on whichever rung is
 closest and leaves the rest blank, which is what "there is space below it"
-meant. The drawing is seven rows tall whatever its width, so it cannot fill a
-tall screen by itself. The frame is measured once and every leftover row goes
-to what the store has learned lately. That fills the screen exactly, and fills
-it with the most useful thing on it.
+meant. The drawing cannot fill a tall screen by itself at any width, so the
+frame is measured once and facts are added one at a time until the screen is
+full, keeping the last version that fits. Grown and measured rather than
+calculated: the drawing can be taller than the column beside it, in which case
+the first few facts cost no height at all, and arithmetic that assumed
+otherwise left a quarter of the screen empty.
 
 **Which candidate to print is measured, not calculated.** `_first_that_fits`
 renders each version and counts the lines. How tall any of them is depends on
