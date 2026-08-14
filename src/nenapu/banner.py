@@ -199,30 +199,75 @@ def _tool_surface() -> tuple[str, str]:
     return "tools", f"{len(names)} over MCP [dim]({profile})[/]"
 
 
+# What the hero view drops as the terminal gets shorter, in the order it drops
+# it. A logo that has scrolled off the top is not a logo, so the wordmark is
+# the last thing to go and the prose is the first.
+ROOM_FOR_EXPLAINER = 30   # rows below which the three-line pitch is dropped
+ROOM_FOR_ART = 20         # rows below which the block wordmark becomes one line
+# The pitch is written as three hand-set lines of prose, the longest 76
+# characters. Narrower than that plus its indent and Rich truncates it
+# mid-sentence with an ellipsis, which reads as a bug rather than as a summary.
+WIDTH_FOR_EXPLAINER = 82
+
+
+def wordmark(console):
+    """The block letters on their own, coloured, for a caller doing its own
+    layout. Returns an empty list when the terminal is too narrow for them."""
+    from rich.text import Text
+
+    if console.width < MIN_PANEL_WIDTH:
+        return []
+    shades = hero_shades()
+    art = HERO if _unicode(console) else HERO_ASCII
+    return [Text(line, style=shades[i % len(shades)]) for i, line in enumerate(art)]
+
+
 def panel(console, *, version: str = "", conn: sqlite3.Connection | None = None,
-          path: str = "", backend: str = ""):
-    """The hero view: wordmark, then a two-column readout of the store."""
+          path: str = "", backend: str = "", rows: int | None = None,
+          art: bool | None = None, explainer: bool | None = None,
+          mark: bool | None = None):
+    """The hero view: wordmark, then a two-column readout of the store.
+
+    `rows` is how much vertical room the caller has. The view sheds parts to
+    stay inside it, because the alternative is what this looked like before:
+    seventy-three lines on a twenty-four row terminal, with the wordmark fifty
+    lines above the top of the screen and nobody ever seeing it.
+    """
     from rich.table import Table
     from rich.text import Text
 
     unicode = _unicode(console)
     shades = hero_shades()
-    art = HERO if unicode else HERO_ASCII
+    rows = rows or 999
+    # `art` and `explainer` let a caller doing side-by-side layout decide for
+    # itself; left alone, the height budget decides.
+    art = (rows >= ROOM_FOR_ART) if art is None else art
+    explainer = ((rows >= ROOM_FOR_EXPLAINER and console.width >= WIDTH_FOR_EXPLAINER)
+                 if explainer is None else explainer)
 
     body = Table.grid()
     body.add_column(no_wrap=True)
 
-    if console.width >= MIN_PANEL_WIDTH:
-        for i, line in enumerate(art):
-            body.add_row(Text(line, style=shades[i % len(shades)]))
+    if console.width >= MIN_PANEL_WIDTH and art:
+        for line in wordmark(console):
+            body.add_row(line)
         body.add_row("")
 
     tagline = ("[bold]ನೆನಪು[/]  [dim]·[/]  " if unicode else "") + f"[dim]{TAGLINE}[/]"
+    # With no block letters the name has to appear somewhere, so the mark and
+    # the name share the tagline — unless the caller is drawing the wordmark
+    # itself somewhere else on the screen, in which case repeating it is noise.
+    if mark is None:
+        mark = not art
+    if mark:
+        tagline = (f"[{shades[0]}]{STAMP}[/]  [bold]nenapu[/]  [dim]·[/]  "
+                   f"[dim]{TAGLINE}[/]")
     body.add_row(f"  {tagline}")
     body.add_row("")
-    for line in EXPLAINER:
-        body.add_row(f"  [dim]{line}[/]")
-    body.add_row("")
+    if explainer:
+        for line in EXPLAINER:
+            body.add_row(f"  [dim]{line}[/]")
+        body.add_row("")
 
     # Pairs laid out two per row: at 80 columns a single flat line wraps and
     # the alignment falls apart.

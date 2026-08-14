@@ -52,9 +52,18 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _big_panel(console_out, db: str | None = None, store=None) -> None:
-    """Dog plus a readout of the store. Opening the store is worth it here —
-    someone asking for this view wants to see the state of their memory."""
+def _height(console_out, renderable) -> int:
+    """How many lines a renderable will take at this console's width."""
+    return len(console_out.render_lines(renderable, pad=False))
+
+
+def _big_panel(console_out, db: str | None = None, store=None,
+               rows: int | None = None) -> int:
+    """Wordmark plus a readout of the store, sized to the room available.
+
+    Returns the number of lines printed, so the caller can spend what is left
+    on the command list rather than pushing the wordmark off the top of the
+    screen — which is what it did before anything here counted rows."""
     from .banner import panel
     from .llm import available
 
@@ -70,10 +79,12 @@ def _big_panel(console_out, db: str | None = None, store=None) -> None:
     ok, detail = available()
     # The URL is noise in a status line; the backend and model are the answer.
     backend = detail.split(" @ ")[0] if ok else ""
+    hero = panel(console_out, version=__version__, conn=conn,
+                 path=path or "", backend=backend, rows=rows)
     console_out.print()
-    console_out.print(panel(console_out, version=__version__, conn=conn,
-                            path=path or "", backend=backend))
+    console_out.print(hero)
     console_out.print()
+    return _height(console_out, hero) + 2
 
 
 @app.callback(invoke_without_command=True)
@@ -96,7 +107,9 @@ def main(ctx: typer.Context) -> None:
         except Exception:  # noqa: BLE001 — never fail on the greeting path
             pass
         if not quiet:
-            _big_panel(console, store=store)
+            console.print()
+            console.print(_landing(store))
+            console.print()
 
         # The very first bare `nenapu` is someone who just installed it. Wire
         # it up and explain it once; after that a bare invocation is someone
@@ -107,8 +120,10 @@ def main(ctx: typer.Context) -> None:
             raise typer.Exit(0)
 
         # A bare `nenapu` is someone looking around, not a usage error — so
-        # show the commands and exit clean, rather than Typer's exit code 2.
-        console.print(ctx.get_help())
+        # exit clean rather than with Typer's exit code 2. The command names
+        # are already on the screen above; `--help` has the descriptions.
+        if quiet:
+            console.print(ctx.get_help())
         raise typer.Exit(0)
 
     # Hooks are machine-to-machine. `recall-hook` writes into a session's
@@ -116,6 +131,143 @@ def main(ctx: typer.Context) -> None:
     # noise in a log at best and content in a prompt at worst.
     if not quiet and ctx.invoked_subcommand not in ("version", "recall-hook", "observe"):
         err_console.print(stamp(__version__))
+
+
+# The landing view is two columns when there is room for them. Stacked, the
+# wordmark, the dog and fifty lines of grouped help come to seventy-three rows
+# — on a twenty-four row terminal the mark someone ran the command to look at
+# has scrolled off the top before they can read it. Side by side it is under
+# twenty, and nothing scrolls at all.
+SIDE_BY_SIDE_WIDTH = 96
+
+
+def _first_that_fits(candidates, rows: int):
+    """The first candidate that fits the screen, or the smallest one.
+
+    Measured rather than calculated. How tall any of these is depends on how
+    many commands exist and where the terminal wraps them, and a landing view
+    that is one row too tall scrolls the wordmark off the top — which is the
+    entire bug this is here to prevent.
+    """
+    for candidate in candidates:
+        if _height(console, candidate) <= rows - 1:
+            return candidate
+    return candidates[-1]
+
+
+def _command_groups() -> dict[str, list[str]]:
+    """Command names by the panel they belong to, straight from the app.
+
+    Read off the registry rather than written out again here: a list that has
+    to be maintained twice is a list that goes stale the first time someone
+    adds a command.
+    """
+    groups: dict[str, list[str]] = {}
+    for command in app.registered_commands:
+        name = command.name or (command.callback.__name__.replace("_", "-")
+                                if command.callback else "")
+        if name and not command.hidden:
+            groups.setdefault(command.rich_help_panel or "Commands", []).append(name)
+    for group in app.registered_groups:
+        if group.name:
+            groups.setdefault(group.rich_help_panel or "Commands", []).append(group.name)
+    return {panel: sorted(names) for panel, names in groups.items()}
+
+
+def _commands_table():
+    """The names alone, grouped. The descriptions live in `--help`."""
+    from rich.table import Table
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column(no_wrap=True, style="bold cyan")
+    table.add_column()
+    for panel_name, names in _command_groups().items():
+        table.add_row(panel_name, "[dim]" + "  ".join(names) + "[/]")
+    return table
+
+
+def _landing(store):
+    """Wordmark, store readout, the dog, and what you can type — on one screen.
+
+    Stacked, those come to seventy-three rows, so on a twenty-four row terminal
+    the mark someone ran the command to look at has scrolled off the top before
+    they can read it. The wordmark spans the top; below it the dog takes the
+    left and everything else the right. Under twenty rows total, and nothing
+    scrolls.
+
+    The dog shows its real mood here, the same as `nenapu pet` does. This view
+    already opens the store and reads it, so the health pass costs nothing that
+    was not already being paid — and a landing screen is exactly where an
+    unwell store should be visible.
+    """
+    from rich.console import Group
+    from rich.table import Table
+    from rich.text import Text
+
+    from .banner import hero_shades, panel, wordmark
+    from .llm import available
+
+    conn = path = None
+    try:
+        if store is not None:
+            conn = store.conn
+            path = store.conn.execute("PRAGMA database_list").fetchone()[2]
+    except Exception:  # noqa: BLE001 — a banner must never break the command
+        pass
+
+    ok, detail = available()
+    backend = detail.split(" @ ")[0] if ok else ""
+    rows, wide = console.size.height, console.width >= SIDE_BY_SIDE_WIDTH
+
+    hint = Text.from_markup("[dim]nenapu --help for what each one does[/]")
+
+    if not wide:
+        def stacked(art: bool, commands: bool):
+            parts = [panel(console, version=__version__, conn=conn, path=path or "",
+                           backend=backend, rows=rows, art=art), Text("")]
+            if commands:
+                parts += [_commands_table(), Text("")]
+            return Group(*parts, hint)
+
+        # Tried largest first and measured, rather than reasoned about: the
+        # arithmetic depends on how many commands exist and how the terminal
+        # wraps them, and getting it wrong is the bug this whole change is for.
+        return _first_that_fits([stacked(True, True), stacked(False, True),
+                                 stacked(False, False)], rows)
+
+    right = Table.grid()
+    right.add_column(no_wrap=True)
+    # No wordmark and no prose in the column: the block letters go across the
+    # top where they have the width, and the three-line pitch does not fit
+    # beside the dog without being truncated mid-sentence.
+    right.add_row(panel(console, version=__version__, conn=conn, path=path or "",
+                        backend=backend, art=False, explainer=False,
+                        mark=rows < 26))
+    right.add_row("")
+    right.add_row(_commands_table())
+    right.add_row("")
+    right.add_row("[dim]nenapu --help for what each one does[/]")
+
+    art = Text("")
+    try:
+        from .pet import assess
+        from .pet_art import coloured
+
+        mood = assess(store).mood if store is not None else "content"
+        art = Text.from_markup("\n".join(coloured(mood, hero_shades())))
+    except Exception:  # noqa: BLE001 — the dog is never the reason a run fails
+        pass
+
+    columns = Table.grid(padding=(0, 4))
+    columns.add_column(vertical="middle")
+    columns.add_column(vertical="middle")
+    columns.add_row(art, right)
+
+    # The block letters are the first thing to go when the screen is short:
+    # better a landing view without them than a landing view that scrolls.
+    header = wordmark(console) if rows >= 26 else []
+    with_header = Group(*header, Text(""), columns) if header else columns
+    return _first_that_fits([with_header, columns], rows)
 
 
 def _greet(store) -> None:

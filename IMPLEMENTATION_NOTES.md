@@ -344,6 +344,34 @@ An unwell dog is not drawn in the user's theme colour. The point of the
 creature is that a bad store cannot look like a good one, and a calm teal dog
 with its eyes crossed still reads as fine at a glance.
 
+## The landing view is measured, not guessed
+
+A bare `nenapu` printed seventy-three rows: the hero panel, then Typer's
+grouped help. On a twenty-four row terminal that put the wordmark someone had
+just run the command to look at fifty lines above the top of the screen. It was
+reported as "the logo scrolls away", which is exactly what it was.
+
+Two columns fixed it rather than trimming did. The block letters span the top,
+the dog takes the left, and the store readout and command names take the right
+— under twenty rows, and the full descriptions live in `--help` where they cost
+nothing. Below 96 columns the layout stacks instead, because two thin columns
+make Rich cut command names mid-word.
+
+The parts are shed in a fixed order as the screen shrinks: the three-line pitch
+first, then the block letters, then the command list. The wordmark is last
+because it is the thing being protected.
+
+**Which candidate to print is measured, not calculated.** `_first_that_fits`
+renders each version and counts the lines. How tall any of them is depends on
+how many commands are registered and where the terminal wraps them, and
+arithmetic that is one row wrong scrolls the wordmark off the top — which is
+the entire bug.
+
+The tests print the view at a dozen terminal sizes and assert it fits every
+one. They immediately found a second truncation: the three-line pitch is
+hand-set at 76 characters, so under 82 columns Rich cut it mid-sentence, which
+reads as a bug rather than as a summary. It is dropped below that width now.
+
 ## Things still open
 
 - The repo is private, so the install URL in the README 404s for anyone else.

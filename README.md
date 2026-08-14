@@ -115,8 +115,14 @@ nenapu                                                     # first run: sets it 
 ```
 
 The first bare `nenapu` walks you through setup and then shows a how-to guide.
-It does that once — after that a bare `nenapu` is just the command list, and
-`nenapu guide` brings the walkthrough back.
+It does that once — after that a bare `nenapu` is the landing view: wordmark,
+what the store holds, the dog, and every command you can type, on one screen
+that does not scroll. `nenapu guide` brings the walkthrough back.
+
+On a wide terminal the dog sits beside the readout; on a narrow one it stacks;
+on a short one the block letters give way to the one-line mark. The view is
+measured against the terminal before it is printed and sheds whichever part it
+has to, because a wordmark that has scrolled off the top is not a wordmark.
 
 Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
 it up.
