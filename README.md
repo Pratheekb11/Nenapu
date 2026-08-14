@@ -195,6 +195,40 @@ Ten tools: `memory_search`, `memory_write`, `memory_why`, `memory_verify`,
 This is the weaker mode, and honestly so: it only fires when the agent decides
 to fire it. Hooks are the reason Nenapu works when nobody is cooperating.
 
+## What leaves your machine
+
+Worth reading before you install this, because the answer is not "nothing".
+
+**The Stop hook sends your session to a model.** Extraction reads the finished
+transcript and sends up to 24,000 characters of the conversation — your
+prompts, the assistant's replies, whatever you pasted — to whichever backend
+`nenapu doctor` reports. With `auto` that is `claude -p` if the Claude CLI is
+installed, so on most machines it goes to Anthropic, the same place the session
+itself went. Point it at Ollama or LM Studio (`NENAPU_LLM=ollama`) and nothing
+leaves the machine at all.
+
+**Credentials are stripped before that happens.** Redaction runs at harvest,
+upstream of both the model call and the store, so a secret in the transcript is
+never sent and never written. Shaped keys are matched by prefix — Anthropic,
+OpenAI, GitHub, Slack, AWS, Google, JWTs, `Authorization:` headers, PEM private
+key blocks, passwords inside URLs — and anything *named* like a secret
+(`DB_PASSWORD=`, `client_secret:`) is blanked by name, since a secret's value
+is not distinguishable from any other short string. Each becomes
+`[redacted:kind]`, so a fact that came from such a line reads as though
+something was removed.
+
+It is a deny list, and a deny list is never finished. A credential with no
+recognisable shape, in something not named like a secret, will not be caught.
+
+**Nothing else phones home.** No telemetry, no update check, no analytics. The
+store is one SQLite file at `~/.nenapu/nenapu.db`, created `0600` inside a
+`0700` directory, and an older store with looser permissions is tightened the
+next time it is opened.
+
+**Turn observation off** by removing the `Stop` hook from
+`~/.claude/settings.json` — `nenapu init` will not put it back without being
+run again. Recall keeps working; the layer just stops learning on its own.
+
 ## Executable checks are gated
 
 `verify_cmd` is shell, and facts are written by agents that read untrusted

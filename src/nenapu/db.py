@@ -270,6 +270,41 @@ def commit(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _make_private(target: Path) -> None:
+    """Create the store owner-only, and repair a store that predates this.
+
+    The file holds facts extracted from private sessions — paths, hostnames,
+    whatever the user pasted. The process umask left it 0644 inside a 0755
+    directory, so on any shared machine every account could read it. SQLite
+    also writes `-wal` and `-shm` beside it, which carry the same content and
+    are created by the driver, so they are narrowed too once they exist.
+
+    Best effort by design: a store on a filesystem with no POSIX permissions
+    (a mounted share, Windows) must still open. Being unable to tighten the
+    mode is not a reason to refuse someone their memory.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(target.parent, 0o700)
+        if not target.exists():
+            # Created here rather than left to the driver: sqlite3 opens with
+            # the process umask, so a file it creates is 0644 for the moment
+            # before we could chmod it, and that moment is enough on a shared
+            # box. An empty file is a valid empty database.
+            os.close(os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        else:
+            os.chmod(target, 0o600)
+    except OSError:
+        pass
+    for sidecar in ("-wal", "-shm"):
+        path = target.with_name(target.name + sidecar)
+        try:
+            if path.exists():
+                os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
     """Open (creating if needed) the store and apply the schema."""
     if path is None or str(path) in ("", ":memory:"):
@@ -278,7 +313,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         target = Path(path).expanduser()
 
     if target != ":memory:":
-        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        _make_private(Path(target))
 
     # isolation_level=None puts the driver in autocommit, so transactions are
     # explicit (`BEGIN IMMEDIATE` in Store.transaction) rather than implicitly
@@ -305,6 +340,8 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         return conn
 
     conn.execute("PRAGMA journal_mode=WAL")
+    if target != ":memory:":
+        _make_private(Path(target))  # -wal and -shm exist only now
     _drop_replaced_triggers(conn)
     conn.executescript(SCHEMA)
     _add_missing_columns(conn)

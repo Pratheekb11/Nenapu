@@ -1,3 +1,5 @@
+import os
+import stat
 import time
 
 import pytest
@@ -151,3 +153,54 @@ def test_rephrasing_and_elaboration_are_not_conflicts(store):
     assert not looks_contradictory("port is 8080", "the port is 8080")[0]
     assert not looks_contradictory("we deploy on Tuesday",
                                    "we deploy on Tuesday, after standup")[0]
+
+
+# ---------- who else can read your memory ----------
+
+
+def test_a_new_store_is_owner_only(tmp_path):
+    """The file holds facts extracted from private sessions. The process umask
+    left it 0644 inside a 0755 directory, so on a shared machine every account
+    on the box could read them."""
+    db = tmp_path / "nest" / "nenapu.db"
+    connect(str(db)).close()
+
+    assert stat.S_IMODE(db.stat().st_mode) == 0o600
+    assert stat.S_IMODE(db.parent.stat().st_mode) == 0o700
+
+
+def test_an_existing_loose_store_is_tightened_on_open(tmp_path):
+    """Anyone already running this has a 0644 store. Fixing only new installs
+    would leave exactly the people who trusted it earliest exposed."""
+    db = tmp_path / "nenapu.db"
+    connect(str(db)).close()
+    os.chmod(db, 0o644)
+    os.chmod(tmp_path, 0o755)
+
+    connect(str(db)).close()
+
+    assert stat.S_IMODE(db.stat().st_mode) == 0o600
+    assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+
+
+def test_the_wal_sidecars_are_owner_only_too(tmp_path):
+    """`-wal` carries the same content and is created by the driver, not us."""
+    db = tmp_path / "nenapu.db"
+    conn = connect(str(db))
+    Store(conn).write(Fact(text="something private", kind=Kind.PROJECT,
+                           origin=Origin.USER_STATED))
+
+    wal = db.with_name(db.name + "-wal")
+    assert wal.exists(), "WAL is on; this test is checking the wrong thing"
+    assert stat.S_IMODE(wal.stat().st_mode) == 0o600
+
+
+def test_a_filesystem_that_cannot_chmod_still_opens(tmp_path, monkeypatch):
+    """A share or a Windows volume must not cost someone their memory."""
+    def _refuse(*args, **kwargs):
+        raise OSError("this filesystem does not do modes")
+
+    monkeypatch.setattr(os, "chmod", _refuse)
+    conn = connect(str(tmp_path / "nenapu.db"))
+
+    assert Store(conn).search("anything") == []

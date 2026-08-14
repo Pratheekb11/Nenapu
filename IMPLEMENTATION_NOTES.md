@@ -162,6 +162,40 @@ plain path argument and is itself the extraction, so refusing it meant never
 observing anything at all. The test suite caught that within a minute, which is
 the argument for the test existing.
 
+### What the store and the harvest give away
+
+Two things a stranger's machine made obvious that this one never would.
+
+**The store was world-readable.** `~/.nenapu/nenapu.db` came out `0644` inside
+a `0755` directory, because nothing ever set a mode and the process umask
+decided. That file holds facts extracted from private sessions. The file is now
+created by `os.open(..., 0o600)` rather than left to the driver — sqlite would
+create it with the umask, and the gap between that and a `chmod` is enough on a
+shared box — the directory is `0700`, and `-wal`/`-shm` are narrowed once the
+driver has made them. An existing loose store is tightened on the next open,
+because fixing only new installs leaves exactly the people who trusted it
+earliest exposed.
+
+**A transcript is not a document the user wrote for us.** It is whatever went
+past: a pasted `.env`, a curl with a bearer token, a key echoed by a failing
+command. Redaction runs at harvest and nowhere else, because harvest is
+upstream of both things that outlive the session — the model call and the
+store. Anywhere later and the secret has already been sent.
+
+Shaped credentials are matched by prefix. Everything else is matched by *what
+it is called*, since a secret's value is not distinguishable from any other
+short string: `DB_PASSWORD=hunter2swordfish` goes, `max_tokens=2048` and
+`NENAPU_LLM_TIMEOUT=180` stay. That direction of error is the safe one, and
+both directions are pinned by tests — over-redacting produces a memory layer
+that records nothing worth having, which is its own kind of failure.
+
+A URL keeps everything but the password: `postgres://admin:pw@db:5432/app`
+becomes `postgres://admin:[redacted:url-password]@db:5432/app`, because the
+host and database are the part worth remembering. It is a deny list, and a deny
+list is never finished — a credential with no recognisable shape, in something
+not named like one, gets through. The README says so rather than implying
+otherwise.
+
 ## Decisions that came from measurement
 
 Each of these was wrong on first attempt. The measurement is recorded because

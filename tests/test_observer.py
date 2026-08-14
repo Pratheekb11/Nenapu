@@ -20,6 +20,7 @@ from nenapu.observer import (
     hook_payload,
     observe_transcript,
     recall_context,
+    redact,
 )
 from nenapu.store import Store
 
@@ -395,3 +396,65 @@ def test_the_extraction_itself_is_not_blocked_by_the_marker(tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert Store(connect(str(db))).search("make ship")
+
+
+# ---------- redaction ----------
+
+
+@pytest.mark.parametrize("line, label", [
+    ("export ANTHROPIC_API_KEY=sk-ant-api03-abcdefghij123456", "anthropic-key"),
+    ("OPENAI_KEY=sk-abcdefghijklmnopqrstuvwx", "api-key"),
+    ("the token is ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "github-token"),
+    ("use github_pat_11ABCDEFG0abcdefghijklmnop for that", "github-token"),
+    ("slack: xoxb-1234567890-abcdefghij", "slack-token"),
+    ("id AKIAIOSFODNN7EXAMPLE in the profile", "aws-key-id"),
+    ("key AIzaabcdefghijklmnopqrstuvwxyzABCDEFGHI here", "google-key"),
+    ("cookie eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N", "jwt"),
+    ('curl -H "Authorization: Bearer abc123def456ghi789"', "auth-header"),
+    ("DB_PASSWORD=hunter2swordfish", "secret"),
+    ("client_secret: 8f4b2c9a1e6d0b3f", "secret"),
+])
+def test_a_credential_never_leaves_the_harvest(line, label):
+    """Harvest is upstream of both the model call and the store, so it is the
+    only place where redacting means the secret was never sent anywhere."""
+    out = redact(line)
+    assert f"[redacted:{label}]" in out
+    leaked = line.split("=")[-1].split(":")[-1].strip().strip('"')
+    assert leaked not in out
+
+
+def test_a_password_in_a_url_keeps_the_host_it_was_in():
+    """`postgres://admin:pw@db:5432/app` is a fact worth remembering once the
+    password is gone. Blanking the whole URL would throw away the memory."""
+    out = redact("postgres://admin:s3cr3tpw@db.internal:5432/app")
+    assert "s3cr3tpw" not in out
+    assert "db.internal:5432/app" in out
+    assert "admin" in out
+
+
+@pytest.mark.parametrize("line", [
+    "structured(..., max_tokens=2048)",
+    "NENAPU_LLM_TIMEOUT=180",
+    "the db port is 5432 and the test command is make test",
+    "set auth=true in the config",
+    "the user wants tokens counted, not estimated",
+])
+def test_ordinary_conversation_survives(line):
+    """The cost of over-redacting is a memory layer that records nothing
+    useful, so the keeps matter as much as the removes."""
+    assert redact(line) == line
+
+
+def test_the_transcript_reader_redacts_before_returning(tmp_path):
+    """Every caller — the model call, `--dry-run`, the store — goes through
+    this one function, so there is no path that forgets to ask."""
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text("\n".join(
+        _event("user", "deploy with ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 and make ship")
+        for _ in range(50)))
+
+    text = _read_transcript(transcript)
+
+    assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in text
+    assert "[redacted:github-token]" in text
+    assert "make ship" in text

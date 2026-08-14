@@ -28,6 +28,7 @@ is least likely to record about itself.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .llm import Backend, LLMUnavailable, detect_backend, structured
@@ -86,6 +87,70 @@ Write each as a standalone sentence that will still make sense in six months
 with none of this conversation around it. Give a dotted key for facts that are
 one value for one subject (db.port, test.command), otherwise an empty string.
 Prefer few, durable facts over many disposable ones."""
+
+
+# ---------- redaction ----------
+#
+# A transcript is not a document the user wrote for us. It is whatever went
+# past during the session: a pasted `.env`, a curl with a bearer token, a key
+# echoed by a failing command. Harvest is the only place worth doing this,
+# because it is upstream of both the things that outlive the session — the
+# model call, and the store. Redacting later would mean the secret had already
+# been sent somewhere.
+#
+# Shaped keys are matched by their own prefix. Everything else is matched by
+# what it is *called*, because a secret's value is not distinguishable from a
+# short string of letters. That direction of error is the safe one: at worst a
+# nonsense assignment is blanked out and the session's meaning survives, which
+# is what the "keeps" tests pin down.
+
+_ASSIGNED = (
+    r"(?i)\b([A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|password|passwd|pwd|"
+    r"credential|auth)[A-Za-z0-9_.-]*)\s*[:=]\s*"
+    r"[\"']?([^\s\"',;)]{6,})[\"']?"
+)
+
+REDACTIONS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+                re.S), "private-key"),
+    (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{8,}"), "anthropic-key"),
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), "api-key"),
+    (re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}"), "github-token"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"), "github-token"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{8,}"), "slack-token"),
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "aws-key-id"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "google-key"),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"), "jwt"),
+    (re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/-]{12,}=*"), "auth-header"),
+    (re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*://[^\s:@/]+):[^\s:@/]+@"), "url-password"),
+]
+
+# Values that are plainly not secrets, however the thing holding them is
+# named. `max_tokens=2048` and `timeout=180` are conversation, not credentials.
+_NOT_A_SECRET = re.compile(r"^(?:\d+|true|false|none|null|nil)$", re.I)
+
+
+def redact(text: str) -> str:
+    """Blank out credentials in harvested conversation.
+
+    Returns the text with each match replaced by `[redacted:<kind>]`, which is
+    left in place deliberately: a fact extracted from a line that had a secret
+    in it should read as though something was removed, not as though the line
+    said something else.
+    """
+    for pattern, label in REDACTIONS:
+        if label == "url-password":
+            text = pattern.sub(rf"\1:[redacted:{label}]@", text)
+        else:
+            text = pattern.sub(f"[redacted:{label}]", text)
+
+    def _assignment(match: re.Match[str]) -> str:
+        name, value = match.group(1), match.group(2)
+        if _NOT_A_SECRET.match(value) or value.startswith("[redacted:"):
+            return match.group(0)
+        return f"{name}=[redacted:secret]"
+
+    return re.sub(_ASSIGNED, _assignment, text)
 
 
 def _turns_from(lines: list[str]) -> list[str]:
@@ -160,7 +225,11 @@ def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str
         window *= 4
 
     joined = "\n\n".join(turns)
-    return joined[-max_chars:] if len(joined) > max_chars else joined
+    trimmed = joined[-max_chars:] if len(joined) > max_chars else joined
+    # Last thing before the text leaves this function, so every caller — the
+    # model call, the dry run, the store — sees the redacted version and there
+    # is no path that forgets to ask.
+    return redact(trimmed)
 
 
 def observe_transcript(
