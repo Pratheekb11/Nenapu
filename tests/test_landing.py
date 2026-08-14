@@ -14,6 +14,9 @@ from nenapu import connect, open_store
 from nenapu.models import Fact, Kind, Origin
 from nenapu.store import Store
 
+# Every braille cell, so a line of drawing can be told from a line of text.
+BRAILLE = "".join(chr(c) for c in range(0x2800, 0x2900))
+
 
 def render(width: int, height: int, store=None) -> list[str]:
     console = Console(width=width, height=height, record=True, file=open("/dev/null", "w"))
@@ -81,7 +84,7 @@ def test_a_narrow_terminal_truncates_nothing_it_wrote_as_prose(store):
 def test_every_command_is_named_somewhere(store):
     """The landing view replaced the full help, so it is now the only place a
     reader is told what exists. A command missing from it is invisible."""
-    listed = {name for names in cli._command_groups().values() for name in names}
+    listed = {name for rows in cli._command_groups().values() for name, _ in rows}
     text = "\n".join(render(120, 40, store))
 
     for name in listed:
@@ -95,7 +98,7 @@ def test_the_command_list_is_read_from_the_app(store):
     groups = cli._command_groups()
 
     assert groups, "no commands found"
-    assert "recall-hook" not in {n for names in groups.values() for n in names}, \
+    assert "recall-hook" not in {n for rows in groups.values() for n, _ in rows}, \
         "hidden commands are machine-to-machine and do not belong on a landing page"
 
 
@@ -121,3 +124,63 @@ def test_an_unwell_store_shows_it_on_the_landing_screen(tmp_path):
     unwell = "\n".join(render(120, 40, store=store))
 
     assert unwell != healthy, "the drawing did not change with the store's health"
+
+
+# ---------- using the room, not just surviving it ----------
+
+
+@pytest.mark.parametrize("width, height", [(120, 40), (110, 30), (100, 36), (96, 30)])
+def test_a_tall_terminal_is_not_mostly_empty(width, height, store):
+    """The first fix over-corrected: twenty-three rows on a forty-row screen,
+    most of it blank, which reads as a program with nothing to say. The view
+    is built at several sizes now and takes the largest that fits."""
+    for i in range(12):
+        store.write(Fact(text=f"a fact worth showing on the landing screen, number {i}",
+                         kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
+
+    used = len(render(width, height, store))
+
+    assert used <= height
+    assert used >= height * 0.7, f"only {used} of {height} rows used"
+
+
+def test_the_dog_grows_with_the_room(store):
+    """Every measurement in the drawing is a multiplication of one number,
+    which is the point of drawing it rather than typing it."""
+    from nenapu.pet_art import draw
+
+    small, large = draw("content"), draw("content", scale=2.0)
+
+    assert len(large) > len(small)
+    assert max(len(r) for r in large) > max(len(r) for r in small)
+
+
+def test_the_dog_is_capped_by_width_not_only_height(store):
+    """Sized against rows alone it grew until the column beside it could not
+    hold a sentence, and Rich answered by cutting every line off with an
+    ellipsis — a bigger drawing bought with the text that says what it knows.
+    """
+    for i in range(12):
+        store.write(Fact(text=f"a fact long enough to be clipped if the column is thin {i}",
+                         kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
+
+    for width in (96, 100, 110, 120):
+        lines = render(width, 44, store)
+        drawn = max((len(line) - len(line.lstrip(BRAILLE)) for line in lines
+                     if line[:1] in BRAILLE), default=0)
+        assert width - drawn >= cli.MIN_TEXT_COLUMN, \
+            f"at {width} columns the drawing left only {width - drawn} for the text"
+
+
+def test_what_it_learned_lately_shows_when_there_is_room(store):
+    """Better filler than more art: someone landing here wants to know the
+    thing is working, and sentences it picked up on its own answer that faster
+    than any number can."""
+    store.write(Fact(text="the deploy command is make ship, not make deploy",
+                     kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
+
+    roomy = "\n".join(render(120, 40, store))
+    cramped = "\n".join(render(110, 20, store))
+
+    assert "Lately" in roomy and "make ship" in roomy
+    assert "Lately" not in cramped, "a short screen should spend its rows on the basics"

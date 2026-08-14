@@ -83,9 +83,6 @@ class Canvas:
         return _crop(rows)
 
 
-# 88x72 dots is 44 columns by 18 text rows. Bigger than it needs to be for a
-# silhouette and not bigger than it needs to be for a face: at 38 columns the
-# eyes were two dots wide and every mood looked the same.
 BLANK = chr(0x2800)  # not a space: `strip()` will not touch it
 
 
@@ -106,107 +103,125 @@ def _crop(rows: list[str]) -> list[str]:
     return [row[left:len(row) - right] for row in rows]
 
 
-# 88x72 dots is 44 columns by 18 text rows. Bigger than a silhouette needs and
-# no bigger than a face needs: at half this the eyes were two dots wide and
-# every mood looked the same.
-# 88x76 dots is 44 columns by 19 text rows. Bigger than a silhouette needs and
-# no bigger than a face needs: at half this the eyes were two dots wide and
-# every mood looked the same.
-# 88x80 dots is 44 columns by 20 text rows.
-# 88x80 dots is 44 columns by 20 text rows.
-# 84x64 dots is 42 columns by 16 text rows.
+# 84x58 dots is 42 columns by 15 text rows at scale 1.0, and the drawing grows
+# from there. The composition went through a filled silhouette and a head on a
+# body before this one; both failed the same way, with parts competing for a
+# small canvas until every feature turned to mush. So there is no body. The
+# face fills the frame, which is the pose every cute animal drawing uses and
+# the reason it works: the eyes get to be enormous and nothing else is asking
+# for room.
 W, H = 84, 58
-HEAD_CX, HEAD_CY = 42, 27
-HEAD_RX, HEAD_RY = 25, 21
-
-# The composition went through a filled silhouette and a head-on-a-body before
-# this one. Both failed the same way: parts competing for a small canvas, and
-# every feature shrinking until it turned to mush. So there is no body. The
-# face fills the frame and two paws hook over the bottom, which is the pose
-# every cute animal drawing uses and the reason it works — the eyes get to be
-# enormous, and nothing else is asking for room.
 STROKE = 1.1
 
 
-def _body(c: Canvas) -> None:
-    """Ears, head, paws. Everything that never changes with mood."""
-    # Ears hang off the top corners, filled, and they are the only heavy shapes
-    # besides the eyes. Outlined ears made the whole thing read as a balloon.
+class Geom:
+    """Every measurement in the drawing, at a given scale.
+
+    The dog is drawn from numbers rather than typed, so a bigger one is a
+    multiplication rather than a second picture. A terminal with forty rows to
+    spare should not be looking at the same postage stamp as one with twenty.
+    """
+
+    def __init__(self, scale: float = 1.0) -> None:
+        self.scale = scale
+        self.width, self.height = round(W * scale), round(H * scale)
+        self.cx, self.cy = self.width / 2, 27 * scale
+        self.rx, self.ry = 25 * scale, 21 * scale
+        # Strokes thicken with the drawing but not proportionally: a hairline
+        # disappears when everything around it grows, and a scaled-up outline
+        # turns into a tube.
+        self.stroke = STROKE * max(1.0, scale * 0.8)
+
+    def s(self, value: float) -> float:
+        return value * self.scale
+
+
+def _body(c: Canvas, g: Geom) -> None:
+    """Ears and head. Everything that never changes with mood.
+
+    Ears hang off the top corners, filled, and they are the only heavy shapes
+    besides the eyes: outlined ears made the whole thing read as a balloon.
+    """
     for side in (-1, 1):
-        c.ellipse(HEAD_CX + side * 23, HEAD_CY - 2, 9, 15, 0)
-        c.ellipse(HEAD_CX + side * 23, HEAD_CY - 2, 8, 14)
+        c.ellipse(g.cx + side * g.s(23), g.cy - g.s(2), g.s(9), g.s(15), 0)
+        c.ellipse(g.cx + side * g.s(23), g.cy - g.s(2), g.s(8), g.s(14))
 
-    c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX + 1.6, HEAD_RY + 1.6, 0)
-    c.ring(HEAD_CX, HEAD_CY, HEAD_RX, HEAD_RY, STROKE + 0.5)
-
-    # No paws, no body. Both were tried and both crowded the chin until the
-    # mouth stopped being legible. Cute is uncluttered before it is anything
-    # else, and the face is carrying the mood on its own.
+    c.ellipse(g.cx, g.cy, g.rx + g.s(1.6), g.ry + g.s(1.6), 0)
+    c.ring(g.cx, g.cy, g.rx, g.ry, g.stroke + g.s(0.5))
 
 
-def _muzzle(c: Canvas, *, open_mouth: bool = False, smile: bool = True) -> None:
-    """A tiny nose set low, and a mouth of two small arcs."""
+def _muzzle(c: Canvas, g: Geom, *, open_mouth: bool = False,
+            smile: bool = True) -> None:
+    """A tiny nose set low, and a mouth of two small arcs.
+
+    Small is the whole point. A long muzzle is what makes a drawn dog look like
+    an animal rather than like a puppy.
+    """
     import math
 
-    c.ellipse(HEAD_CX, HEAD_CY + 9, 3.2, 2.4)                 # nose
-    c.bar(HEAD_CX, HEAD_CY + 11, HEAD_CX, HEAD_CY + 13)       # philtrum
+    c.ellipse(g.cx, g.cy + g.s(9), g.s(3.2), g.s(2.4))              # nose
+    c.bar(round(g.cx), round(g.cy + g.s(11)),
+          round(g.cx), round(g.cy + g.s(13)))                       # philtrum
 
     if open_mouth:
-        c.ellipse(HEAD_CX, HEAD_CY + 15, 3.6, 3.2, 0)
-        c.ring(HEAD_CX, HEAD_CY + 15, 3.6, 3.2, STROKE)
+        c.ellipse(g.cx, g.cy + g.s(15), g.s(3.6), g.s(3.2), 0)
+        c.ring(g.cx, g.cy + g.s(15), g.s(3.6), g.s(3.2), g.stroke)
         return
     if smile:
         for side in (-1, 1):
-            c.arc(HEAD_CX + side * 4, HEAD_CY + 12, 4, 3.2, 0.15, math.pi - 0.15,
-                  STROKE)
-        c.ellipse(HEAD_CX, HEAD_CY + 16, 2.2, 2.2)            # tongue
+            c.arc(g.cx + side * g.s(4), g.cy + g.s(11), g.s(4), g.s(3.2),
+                  0.15, math.pi - 0.15, g.stroke)
+        c.ellipse(g.cx, g.cy + g.s(17), g.s(2.6), g.s(2.8))         # tongue
     else:
         for side in (-1, 1):
-            c.arc(HEAD_CX + side * 4, HEAD_CY + 16, 4, 3.2,
-                  math.pi + 0.15, 2 * math.pi - 0.15, STROKE)
+            c.arc(g.cx + side * g.s(4), g.cy + g.s(16), g.s(4), g.s(3.2),
+                  math.pi + 0.15, 2 * math.pi - 0.15, g.stroke)
 
 
-def _eyes(c: Canvas, style: str) -> None:
-    """Big, filled, low on the face, with a catchlight punched out.
+def _eyes(c: Canvas, g: Geom, style: str) -> None:
+    """Big, filled, low on the face, with a catchlight beside the pupil.
 
     They are the only large dark shapes on an empty face, which is what makes
     it read as looking back rather than as a circle with marks in it.
     """
     import math
 
-    left, right, y = HEAD_CX - 11, HEAD_CX + 11, HEAD_CY + 2
-    if style == "closed":                                     # happy ∪ arcs
+    left, right, y = g.cx - g.s(11), g.cx + g.s(11), g.cy + g.s(2)
+    if style == "closed":                                           # happy arcs
         for cx in (left, right):
-            c.arc(cx, y - 2, 5.5, 4.5, 0.2, math.pi - 0.2, 1.3)
+            c.arc(cx, y - g.s(2), g.s(5.5), g.s(4.5), 0.2, math.pi - 0.2,
+                  g.stroke + g.s(0.2))
         return
     if style == "cross":
+        span = round(g.s(5))
         for cx in (left, right):
-            for d in range(-5, 6):
-                for t in (0, 1):
-                    c.set(cx + d + t, y + d)
-                    c.set(cx + d + t, y - d)
+            for d in range(-span, span + 1):
+                for t in range(max(1, round(g.scale))):
+                    c.set(round(cx) + d + t, round(y + d))
+                    c.set(round(cx) + d + t, round(y - d))
         return
-    rx = {"wide": 7.0, "normal": 6.0, "narrow": 6.0}[style]
+    rx = g.s({"wide": 7.0, "normal": 6.0, "narrow": 6.0}[style])
     ry = rx * (0.28 if style == "narrow" else 1.2)
     for cx in (left, right):
         c.ellipse(cx, y, rx, ry)
-    # The catchlight goes *beside* the eye, not inside it. Punched out of the
-    # fill it reads as a crack — braille has no grey to soften a hole with, so
-    # a 3px bite out of a 12px eye is simply a chunk missing.
+    # The catchlight goes beside the eye, not inside it. Punched out of the
+    # fill it reads as a crack: braille has no grey to soften a hole with, so
+    # a bite out of the eye is simply a chunk missing.
     if style != "narrow":
         for cx in (left, right):
-            c.ellipse(cx - rx * 0.55, y - ry * 0.75, 1.4, 1.4, 0)
+            c.ellipse(cx - rx * 0.55, y - ry * 0.75, g.s(1.4), g.s(1.4), 0)
 
 
-def _brows(c: Canvas, angle: str) -> None:
+def _brows(c: Canvas, g: Geom, angle: str) -> None:
     """Worry is mostly eyebrows. Without them every mood is mildly surprised."""
     if angle == "none":
         return
-    for side, cx in ((-1, HEAD_CX - 11), (1, HEAD_CX + 11)):
-        for dx in range(-5, 6):
-            drop = int(dx * side * 0.7) if angle == "down" else int(-dx * side * 0.7)
-            c.set(cx + dx, HEAD_CY - 11 + drop)
-            c.set(cx + dx, HEAD_CY - 10 + drop)
+    span = round(g.s(5))
+    for side, cx in ((-1, g.cx - g.s(11)), (1, g.cx + g.s(11))):
+        for dx in range(-span, span + 1):
+            drop = round(dx * side * 0.7) * (1 if angle == "down" else -1)
+            for t in range(max(2, round(g.s(2)))):
+                c.set(round(cx) + dx, round(g.cy - g.s(11)) + drop + t)
 
 
 # Each mood is the same dog with a different face. Nothing here draws a new
@@ -224,15 +239,21 @@ FACE_BY_MOOD = {
 }
 
 
-def draw(mood: str, *, blink: bool = False) -> list[str]:
-    """The dog, as braille rows. `blink` shuts whatever eyes are open."""
+def draw(mood: str, *, blink: bool = False, scale: float = 1.0) -> list[str]:
+    """The dog, as braille rows.
+
+    `blink` shuts whatever eyes are open. `scale` grows the whole drawing —
+    every measurement is a multiplication of one, which is the point of having
+    drawn it rather than typed it.
+    """
     face = FACE_BY_MOOD.get(mood, FACE_BY_MOOD["content"])
-    canvas = Canvas(W, H)
-    _body(canvas)
-    _muzzle(canvas, open_mouth=face["mouth"] == "open", smile=face["smile"])
-    _eyes(canvas, "closed" if (blink and face["eyes"] not in ("closed", "cross"))
+    g = Geom(scale)
+    canvas = Canvas(g.width, g.height)
+    _body(canvas, g)
+    _muzzle(canvas, g, open_mouth=face["mouth"] == "open", smile=face["smile"])
+    _eyes(canvas, g, "closed" if (blink and face["eyes"] not in ("closed", "cross"))
           else face["eyes"])
-    _brows(canvas, face["brows"])
+    _brows(canvas, g, face["brows"])
     return canvas.to_braille()
 
 
@@ -254,7 +275,8 @@ ACCENTS = {
 }
 
 
-def coloured(mood: str, shades: list[str], *, blink: bool = False) -> list[str]:
+def coloured(mood: str, shades: list[str], *, blink: bool = False,
+             scale: float = 1.0) -> list[str]:
     """Rows as Rich markup, with the gradient running down the body.
 
     Two rows per shade rather than a per-row interpolation: the dog is
@@ -262,7 +284,7 @@ def coloured(mood: str, shades: list[str], *, blink: bool = False) -> list[str]:
     terminal that quantises colour.
     """
     palette = MOOD_SHADES.get(mood, shades)
-    rows = draw(mood, blink=blink)
+    rows = draw(mood, blink=blink, scale=scale)
     accents = dict((row, text) for row, text in ACCENTS.get(mood, []))
 
     out = []

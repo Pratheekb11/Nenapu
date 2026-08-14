@@ -139,6 +139,9 @@ def main(ctx: typer.Context) -> None:
 # has scrolled off the top before they can read it. Side by side it is under
 # twenty, and nothing scrolls at all.
 SIDE_BY_SIDE_WIDTH = 96
+# Columns the text beside the dog needs before it starts losing words. Facts
+# are sentences; under this they arrive as ellipses and say nothing.
+MIN_TEXT_COLUMN = 62
 
 
 def _first_that_fits(candidates, rows: int):
@@ -155,50 +158,91 @@ def _first_that_fits(candidates, rows: int):
     return candidates[-1]
 
 
-def _command_groups() -> dict[str, list[str]]:
-    """Command names by the panel they belong to, straight from the app.
+def _command_groups(with_help: bool = False) -> dict[str, list[tuple[str, str]]]:
+    """Commands by the panel they belong to, straight from the app's registry.
 
     Read off the registry rather than written out again here: a list that has
     to be maintained twice is a list that goes stale the first time someone
-    adds a command.
+    adds a command, and nothing fails to say so.
     """
-    groups: dict[str, list[str]] = {}
+    def summary(callback) -> str:
+        doc = (callback.__doc__ or "").strip() if callback else ""
+        return doc.split("\n")[0] if with_help else ""
+
+    groups: dict[str, list[tuple[str, str]]] = {}
     for command in app.registered_commands:
         name = command.name or (command.callback.__name__.replace("_", "-")
                                 if command.callback else "")
         if name and not command.hidden:
-            groups.setdefault(command.rich_help_panel or "Commands", []).append(name)
+            groups.setdefault(command.rich_help_panel or "Commands", []).append(
+                (name, command.help or summary(command.callback)))
     for group in app.registered_groups:
         if group.name:
-            groups.setdefault(group.rich_help_panel or "Commands", []).append(group.name)
-    return {panel: sorted(names) for panel, names in groups.items()}
+            groups.setdefault(group.rich_help_panel or "Commands", []).append(
+                (group.name, group.help or "" if with_help else ""))
+    return {panel: sorted(rows) for panel, rows in groups.items()}
 
 
-def _commands_table():
-    """The names alone, grouped. The descriptions live in `--help`."""
+def _commands_table(with_help: bool = False):
+    """What you can type. With descriptions when the screen has room for them,
+    and names alone when it does not — the full text is always in `--help`."""
     from rich.table import Table
 
     table = Table.grid(padding=(0, 2))
-    table.add_column(no_wrap=True, style="bold cyan")
-    table.add_column()
-    for panel_name, names in _command_groups().items():
-        table.add_row(panel_name, "[dim]" + "  ".join(names) + "[/]")
+    if not with_help:
+        table.add_column(no_wrap=True, style="bold cyan")
+        table.add_column()
+        for panel_name, rows in _command_groups().items():
+            table.add_row(panel_name, "[dim]" + "  ".join(n for n, _ in rows) + "[/]")
+        return table
+
+    table.add_column(no_wrap=True, style="cyan")
+    table.add_column(no_wrap=True)
+    for i, (panel_name, rows) in enumerate(_command_groups(True).items()):
+        if i:
+            table.add_row("", "")
+        table.add_row("", f"[bold]{panel_name}[/]")
+        for name, help_text in rows:
+            table.add_row(f"  {name}", f"[dim]{help_text}[/]")
     return table
+
+
+def _recent(store, limit: int, width: int = 64):
+    """The last few things it learned, for a screen with room to show them.
+
+    Better filler than more art: someone landing here wants to know whether the
+    thing is working, and five sentences it picked up on its own answer that
+    faster than any number can.
+    """
+    from rich.table import Table
+
+    table = Table.grid(padding=(0, 2))
+    table.add_column(no_wrap=True, style="dim")
+    table.add_column(no_wrap=True)
+    rows = store.conn.execute(
+        "SELECT text, origin FROM facts WHERE status = 'active'"
+        " ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    for row in rows:
+        mark = "·" if row["origin"] == "user_stated" else "◆"
+        text = row["text"]
+        clipped = text[:width] + ("…" if len(text) > width else "")
+        table.add_row(mark, f"[dim]{clipped}[/]")
+    return table if rows else None
 
 
 def _landing(store):
     """Wordmark, store readout, the dog, and what you can type — on one screen.
 
-    Stacked, those come to seventy-three rows, so on a twenty-four row terminal
-    the mark someone ran the command to look at has scrolled off the top before
-    they can read it. The wordmark spans the top; below it the dog takes the
-    left and everything else the right. Under twenty rows total, and nothing
-    scrolls.
+    Two failures to avoid, in this order. Stacked and unmeasured this came to
+    seventy-three rows, so on a twenty-four row terminal the wordmark someone
+    ran the command to look at had scrolled off before they could read it. Then
+    the fix over-corrected: twenty-three rows on a forty-row screen, most of it
+    empty, which looks like the program has nothing to say.
 
-    The dog shows its real mood here, the same as `nenapu pet` does. This view
-    already opens the store and reads it, so the health pass costs nothing that
-    was not already being paid — and a landing screen is exactly where an
-    unwell store should be visible.
+    So the view is built at several sizes and the largest one that fits is
+    printed. It grows into the room it has — a bigger dog, the three-line
+    pitch, a description against every command — rather than only shrinking out
+    of trouble.
     """
     from rich.console import Group
     from rich.table import Table
@@ -217,57 +261,106 @@ def _landing(store):
 
     ok, detail = available()
     backend = detail.split(" @ ")[0] if ok else ""
-    rows, wide = console.size.height, console.width >= SIDE_BY_SIDE_WIDTH
+    rows, cols = console.size.height, console.width
+    hint = Text.from_markup("[dim]nenapu --help for the full text of any of these[/]")
 
-    hint = Text.from_markup("[dim]nenapu --help for what each one does[/]")
-
-    if not wide:
-        def stacked(art: bool, commands: bool):
-            parts = [panel(console, version=__version__, conn=conn, path=path or "",
-                           backend=backend, rows=rows, art=art), Text("")]
-            if commands:
-                parts += [_commands_table(), Text("")]
-            return Group(*parts, hint)
-
-        # Tried largest first and measured, rather than reasoned about: the
-        # arithmetic depends on how many commands exist and how the terminal
-        # wraps them, and getting it wrong is the bug this whole change is for.
-        return _first_that_fits([stacked(True, True), stacked(False, True),
-                                 stacked(False, False)], rows)
-
-    right = Table.grid()
-    right.add_column(no_wrap=True)
-    # No wordmark and no prose in the column: the block letters go across the
-    # top where they have the width, and the three-line pitch does not fit
-    # beside the dog without being truncated mid-sentence.
-    right.add_row(panel(console, version=__version__, conn=conn, path=path or "",
-                        backend=backend, art=False, explainer=False,
-                        mark=rows < 26))
-    right.add_row("")
-    right.add_row(_commands_table())
-    right.add_row("")
-    right.add_row("[dim]nenapu --help for what each one does[/]")
-
-    art = Text("")
+    mood = "content"
     try:
         from .pet import assess
-        from .pet_art import coloured
 
-        mood = assess(store).mood if store is not None else "content"
-        art = Text.from_markup("\n".join(coloured(mood, hero_shades())))
+        if store is not None:
+            mood = assess(store).mood
     except Exception:  # noqa: BLE001 — the dog is never the reason a run fails
         pass
 
-    columns = Table.grid(padding=(0, 4))
-    columns.add_column(vertical="middle")
-    columns.add_column(vertical="middle")
-    columns.add_row(art, right)
+    def dog(scale: float) -> Text:
+        try:
+            from .pet_art import coloured
 
-    # The block letters are the first thing to go when the screen is short:
-    # better a landing view without them than a landing view that scrolls.
-    header = wordmark(console) if rows >= 26 else []
-    with_header = Group(*header, Text(""), columns) if header else columns
-    return _first_that_fits([with_header, columns], rows)
+            return Text.from_markup("\n".join(coloured(mood, hero_shades(),
+                                                       scale=scale)))
+        except Exception:  # noqa: BLE001
+            return Text("")
+
+    def readout(explainer: bool):
+        return panel(console, version=__version__, conn=conn, path=path or "",
+                     backend=backend, art=False, explainer=explainer, mark=False)
+
+    def art_width(scale: float) -> int:
+        try:
+            from .pet_art import draw
+
+            return max(len(row) for row in draw(mood, scale=scale))
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def side_by_side(scale: float, explainer: bool, recent: int, header: bool):
+        text_width = cols - art_width(scale) - 4
+        right = Table.grid()
+        right.add_column(no_wrap=True)
+        right.add_row(readout(explainer))
+        right.add_row("")
+        if recent and store is not None:
+            learned = _recent(store, recent, width=text_width - 6)
+            if learned is not None:
+                right.add_row("[bold]Lately[/]")
+                right.add_row(learned)
+                right.add_row("")
+        right.add_row(_commands_table())
+        right.add_row("")
+        right.add_row(hint)
+
+        columns = Table.grid(padding=(0, 4))
+        columns.add_column(vertical="middle")
+        columns.add_column(vertical="middle")
+        columns.add_row(dog(scale), right)
+        return Group(*wordmark(console), Text(""), columns) if header else columns
+
+    def stacked(art: bool, commands: bool, recent: int = 0):
+        parts = [panel(console, version=__version__, conn=conn, path=path or "",
+                       backend=backend, rows=rows, art=art), Text("")]
+        if recent and store is not None:
+            learned = _recent(store, recent)
+            if learned is not None:
+                parts += [Text.from_markup("[bold]Lately[/]"), learned, Text("")]
+        if commands:
+            parts += [_commands_table(), Text("")]
+        return Group(*parts, hint)
+
+    # Largest first. Below 96 columns the two columns are each too thin and
+    # Rich cuts command names mid-word, so those sizes stack instead.
+    candidates = []
+    if cols >= SIDE_BY_SIDE_WIDTH:
+        # Descending in size, and finely enough graded that a terminal of any
+        # height lands on something close to full rather than on the next size
+        # down with a third of the screen left over.
+        #
+        # The dog is capped by width as well as by height. Sized only against
+        # rows it grew until the column beside it was too narrow to hold a
+        # sentence, and Rich answered by cutting every line of the readout off
+        # with an ellipsis — a bigger drawing bought with the text that says
+        # what the thing actually knows.
+        # Ordered by how much of the screen each one takes. Where the drawing
+        # is already at its width cap, the remaining rows go into more of what
+        # it has learned rather than into a bigger dog — which is the more
+        # useful thing to be looking at anyway.
+        for scale, recent, header in (
+            (2.8, 14, True), (2.4, 12, True), (2.0, 10, True),
+            (1.7, 20, True), (1.7, 14, True), (1.7, 8, True), (1.7, 6, True),
+            (1.4, 16, True), (1.4, 10, True), (1.4, 5, True),
+            (1.2, 12, True), (1.2, 6, True), (1.2, 4, True),
+            (1.1, 3, True), (1.0, 3, True), (1.0, 2, False),
+            (1.0, 0, True), (1.0, 0, False),
+        ):
+            if scale > 1.0 and art_width(scale) > cols - MIN_TEXT_COLUMN:
+                continue
+            candidates.append(side_by_side(scale, False, recent, header))
+    candidates += [stacked(True, True, 5), stacked(True, True, 3), stacked(True, True),
+                   stacked(False, True), stacked(False, False)]
+    # Three rows held back: the blank line above the view, the one below it,
+    # and the shell prompt that comes next. Filling the terminal exactly still
+    # scrolls the top line away once the prompt is drawn.
+    return _first_that_fits(candidates, rows - 2)
 
 
 def _greet(store) -> None:

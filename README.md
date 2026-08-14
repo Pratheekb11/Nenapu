@@ -119,10 +119,12 @@ It does that once — after that a bare `nenapu` is the landing view: wordmark,
 what the store holds, the dog, and every command you can type, on one screen
 that does not scroll. `nenapu guide` brings the walkthrough back.
 
-On a wide terminal the dog sits beside the readout; on a narrow one it stacks;
-on a short one the block letters give way to the one-line mark. The view is
-measured against the terminal before it is printed and sheds whichever part it
-has to, because a wordmark that has scrolled off the top is not a wordmark.
+The view is built at several sizes and the largest one that fits is printed —
+it grows into the room it has rather than only shrinking out of trouble. On a
+tall wide terminal that means a big dog beside the readout and a list of what
+it learned lately; on a short one the block letters give way to the one-line
+mark; under 96 columns it stacks instead. Nothing scrolls, and nothing is left
+staring at half an empty screen.
 
 Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
 it up.

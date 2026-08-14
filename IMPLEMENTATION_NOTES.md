@@ -361,6 +361,21 @@ The parts are shed in a fixed order as the screen shrinks: the three-line pitch
 first, then the block letters, then the command list. The wordmark is last
 because it is the thing being protected.
 
+**Then the fix over-corrected**, which is worth recording because it is the
+same mistake in the other direction: twenty-three rows on a forty-row screen,
+most of it empty, which reads as a program with nothing to say. So the view is
+now built at a ladder of sizes and the *largest* that fits is printed. It grows
+into the room it has — a bigger dog, more of what it learned lately — rather
+than only shrinking out of trouble. Fill runs 72–96% across every terminal size
+tested.
+
+The drawing is capped by width as well as by height. Sized against rows alone
+it grew until the column beside it could not hold a sentence, and Rich answered
+by cutting every line of the readout off with an ellipsis: a bigger drawing
+bought with the text that says what the thing actually knows. Where the dog is
+already at its width cap the spare rows go into more facts instead, which is
+the more useful thing to be looking at anyway.
+
 **Which candidate to print is measured, not calculated.** `_first_that_fits`
 renders each version and counts the lines. How tall any of them is depends on
 how many commands are registered and where the terminal wraps them, and
