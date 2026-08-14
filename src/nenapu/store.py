@@ -393,6 +393,71 @@ class Store:
     def forget(self, fact_id: int, *, actor: str = "user") -> None:
         self.set_status(fact_id, Status.RETIRED, actor=actor)
 
+    def forget_all(self, *, scope: str | None = None, kind: str | None = None,
+                   actor: str = "user") -> int:
+        """Retire every active fact, optionally narrowed by scope or kind.
+
+        Retired rather than deleted, like every other forget here: the row
+        stays, the journal records who did it, and `nenapu audit` can still
+        explain why the store looks the way it does. `purge` is the one that
+        actually removes rows, and it is a separate word on purpose.
+
+        One statement rather than a loop over `set_status`: retiring a hundred
+        facts individually would fire a hundred cascades, and cascading a
+        falsification into facts that are themselves being retired in the same
+        breath is work whose result nobody will ever read.
+        """
+        where = ["status = ?"]
+        args: list = [Status.ACTIVE]
+        if scope:
+            where.append("scope = ?")
+            args.append(scope)
+        if kind:
+            where.append("kind = ?")
+            args.append(kind)
+        clause = " AND ".join(where)
+
+        with self.transaction():
+            count = self.conn.execute(
+                f"SELECT COUNT(*) c FROM facts WHERE {clause}", args).fetchone()["c"]
+            if count:
+                self.conn.execute(
+                    f"UPDATE facts SET status = ?, updated_at = ? WHERE {clause}",
+                    [Status.RETIRED, now(), *args])
+                self._journal("forget-all", actor=actor,
+                              detail=f"{count} fact(s)"
+                                     + (f" in scope {scope}" if scope else "")
+                                     + (f" of kind {kind}" if kind else ""))
+        return count
+
+    def purge(self, *, scope: str | None = None, actor: str = "user") -> int:
+        """Delete facts outright, and everything hanging off them.
+
+        The one operation here that destroys history. Edges, recalls and
+        conflicts go too — a graph edge to a row that no longer exists is worse
+        than no edge, and a recall that cannot name what it recalled cannot be
+        graded. The journal keeps a line saying it happened, because a store
+        that cannot say why it is empty is indistinguishable from a broken one.
+        """
+        where, args = ("WHERE scope = ?", [scope]) if scope else ("", [])
+        with self.transaction():
+            ids = [r["id"] for r in
+                   self.conn.execute(f"SELECT id FROM facts {where}", args).fetchall()]
+            if ids:
+                marks = ",".join("?" * len(ids))
+                self.conn.execute(
+                    f"DELETE FROM fact_edges WHERE parent_id IN ({marks})"
+                    f" OR child_id IN ({marks})", ids + ids)
+                self.conn.execute(f"DELETE FROM recalls WHERE fact_id IN ({marks})", ids)
+                self.conn.execute(
+                    f"DELETE FROM conflicts WHERE fact_id IN ({marks})"
+                    f" OR other_id IN ({marks})", ids + ids)
+                self.conn.execute(f"DELETE FROM facts WHERE id IN ({marks})", ids)
+            self._journal("purge", actor=actor,
+                          detail=f"{len(ids)} fact(s)"
+                                 + (f" in scope {scope}" if scope else ""))
+        return len(ids)
+
     def mark_used(self, fact_ids: Iterable[int]) -> None:
         ids = list(fact_ids)
         if not ids:

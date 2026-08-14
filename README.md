@@ -186,6 +186,24 @@ nenapu export ./CLAUDE.md    # materialize into a managed block
 
 Run `nenapu` alone for the full command list, grouped into five panels.
 
+### Forgetting
+
+```bash
+nenapu forget 7              # retire one fact
+nenapu forget all            # retire all of them, after confirming
+nenapu clear --scope api     # the same, narrowed to one scope
+nenapu clear --purge         # actually delete the rows, and everything on them
+```
+
+Retiring is the default and it keeps the rows: `nenapu list --status retired`
+still shows them, and the journal records who cleared the store and when. A
+store that has been emptied can still explain itself, which is the whole point
+of the thing. `--purge` is the one that destroys history, and it is a separate
+word rather than a flag on the same meaning.
+
+Neither will run unattended: a pipe is not a person, so a non-interactive
+`clear` refuses instead of assuming, and `--yes` exists for when you mean it.
+
 ## The pet
 
 `nenapu stats` prints eleven numbers and nobody reads them. Eleven numbers have

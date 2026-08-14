@@ -497,8 +497,81 @@ def list_facts(
 
 
 @app.command(rich_help_panel=REMEMBER)
-def forget(fact_id: int, db: str = DB_OPT) -> None:
-    """Retire a fact."""
+def clear(
+    scope: str = typer.Option("", help="Only this scope; omit for everything"),
+    kind: str = typer.Option("", help="Only this kind: user|project|environment|feedback"),
+    purge: bool = typer.Option(False, "--purge",
+                               help="Delete the rows outright instead of retiring them"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation"),
+    db: str = DB_OPT,
+) -> None:
+    """Forget everything at once. Retires by default; `--purge` deletes.
+
+    Retiring is the honest default: the rows stay, the journal says who cleared
+    them and when, and a store that has been emptied can still explain itself.
+    `--purge` is the one that destroys history, which is why it is a separate
+    word rather than a flag on the same meaning.
+    """
+    store, _ = _stores(db)
+    active = store.stats(scope=scope or None).get("active", 0)
+    total = store.conn.execute(
+        "SELECT COUNT(*) c FROM facts" + (" WHERE scope = ?" if scope else ""),
+        (scope,) if scope else ()).fetchone()["c"]
+    doomed = total if purge else active
+
+    if not doomed:
+        console.print("[dim]nothing to clear[/]")
+        return
+
+    where = f" in scope [cyan]{scope}[/]" if scope else ""
+    where += f" of kind [cyan]{kind}[/]" if kind else ""
+    if purge:
+        console.print(f"[red]purge[/] deletes [bold]{doomed}[/] fact(s){where} "
+                      "and every edge, recall and conflict attached to them.")
+        console.print("[dim]this cannot be undone; without --purge they are retired "
+                      "and stay readable[/]")
+    else:
+        console.print(f"retire [bold]{doomed}[/] active fact(s){where}, "
+                      "keeping them for audit")
+
+    if not yes:
+        # A pipe is not a person, and this is the one command here that can
+        # empty a store. Non-interactive runs refuse rather than assuming.
+        if not sys.stdin.isatty():
+            console.print("[red]refusing[/]: not a terminal. Pass --yes to mean it.")
+            raise typer.Exit(1)
+        if not typer.confirm("  go ahead?", default=False):
+            console.print("[dim]left alone[/]")
+            raise typer.Exit(0)
+
+    if purge:
+        gone = store.purge(scope=scope or None)
+        store.conn.execute("VACUUM")
+        console.print(f"[red]purged[/] {gone} fact(s)")
+    else:
+        gone = store.forget_all(scope=scope or None, kind=kind or None)
+        console.print(f"retired {gone} fact(s) — [dim]still readable with "
+                      "`nenapu list --status retired`[/]")
+
+
+@app.command(rich_help_panel=REMEMBER)
+def forget(fact_id: str,
+           yes: bool = typer.Option(False, "--yes", "-y",
+                                    help="Skip the confirmation on `forget all`"),
+           db: str = DB_OPT) -> None:
+    """Retire a fact. `nenapu forget all` clears the store.
+
+    `all` is accepted because it is what people type. It is the same thing as
+    `nenapu clear`, confirmation and all.
+    """
+    if fact_id.strip().lower() == "all":
+        clear(scope="", kind="", purge=False, yes=yes, db=db)
+        return
+    try:
+        fact_id = int(fact_id)
+    except ValueError:
+        raise typer.BadParameter("give a fact id, or `all` to clear the store")
+
     store, _ = _stores(db)
     if not store.get(fact_id):
         raise typer.BadParameter(f"no fact {fact_id}")
