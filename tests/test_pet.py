@@ -171,3 +171,81 @@ def test_freshness_counts_only_what_is_still_known(store):
 
     assert store.get(first.id).status == Status.SUPERSEDED
     assert pet.stats["learned_today"] <= pet.stats["active"]
+
+
+# ---------- the drawing ----------
+
+
+def test_the_drawing_has_no_blank_margin():
+    """`⠀` is U+2800, not a space, so `strip()` leaves it alone. An uncropped
+    canvas is a wide frame of invisible characters that eats terminal width and
+    pushes the status column off the screen."""
+    from nenapu.pet_art import BLANK, draw
+
+    rows = draw("content")
+
+    assert not all(row[0] == BLANK for row in rows)
+    assert not all(row[-1] == BLANK for row in rows)
+    assert set(rows[0]) != {BLANK} and set(rows[-1]) != {BLANK}
+
+
+def test_the_drawing_fits_beside_its_status():
+    from nenapu.pet import FULL_MIN_WIDTH
+    from nenapu.pet_art import draw
+
+    rows = draw("content")
+
+    assert len(rows) <= 18
+    assert max(len(r) for r in rows) < FULL_MIN_WIDTH // 2
+
+
+@pytest.mark.parametrize("mood", ["sick", "spooked", "hungry", "drowsy",
+                                  "restless", "delighted"])
+def test_each_mood_is_visibly_a_different_face(mood):
+    """The moods share one body on purpose. If they also shared a face, the
+    drawing would be decoration rather than a readout."""
+    from nenapu.pet_art import draw
+
+    assert draw(mood) != draw("content")
+
+
+def test_blinking_only_moves_eyes_that_were_open():
+    """A bear whose eyes are already shut should not flicker; that reads as a
+    glitch rather than as a creature."""
+    from nenapu.pet_art import draw
+
+    assert draw("content", blink=True) != draw("content")
+    assert draw("drowsy", blink=True) == draw("drowsy")
+    assert draw("sick", blink=True) == draw("sick")
+
+
+def test_the_art_carries_no_markup_of_its_own():
+    """Rich would swallow a stray bracket, and the bear would lose a row."""
+    from nenapu.pet_art import draw
+
+    assert not any("[" in row or "]" in row for row in draw("spooked"))
+
+
+def test_an_unwell_bear_does_not_get_the_theme_colour():
+    """The whole point is that a bad store cannot look like a good one, and a
+    calm teal bear with its eyes crossed still reads as fine at a glance."""
+    from nenapu.banner import THEMES
+    from nenapu.pet_art import MOOD_SHADES, coloured
+
+    teal = THEMES["teal"]
+    sick = "\n".join(coloured("sick", teal))
+    content = "\n".join(coloured("content", teal))
+
+    assert MOOD_SHADES["sick"][0] in sick
+    assert teal[0] not in sick
+    assert teal[0] in content
+
+
+def test_every_row_of_the_drawing_is_coloured():
+    from nenapu.banner import THEMES
+    from nenapu.pet_art import coloured, draw
+
+    rows = coloured("content", THEMES["teal"])
+
+    assert len(rows) == len(draw("content"))
+    assert all(row.startswith("[#") for row in rows)

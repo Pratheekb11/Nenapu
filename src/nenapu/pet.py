@@ -212,9 +212,9 @@ MOOD_COLOUR = {
 
 
 def render(pet: Pet, *, blink: bool = False) -> str:
-    """The big view, as markup for Rich.
+    """The compact view: the mark, the mood, the numbers.
 
-    Deliberately not a box: the pet is looked at in the middle of doing
+    Deliberately not a box. The pet is looked at in the middle of doing
     something else, and a panel border makes a glance feel like a report.
     """
     colour = MOOD_COLOUR.get(pet.mood, "white")
@@ -225,3 +225,38 @@ def render(pet: Pet, *, blink: bool = False) -> str:
     lines = [f"    [{colour}]{face}[/]{accent}   [italic]{pet.blurb}[/]", ""]
     lines += [f"      [dim]{note}[/]" for note in pet.notes]
     return "\n".join(lines)
+
+
+# Below this width the drawn bear and its status cannot sit side by side, and
+# stacking a 44-column animal on top of the numbers pushes them off a small
+# screen. The compact view is not a fallback, it is the right answer there.
+FULL_MIN_WIDTH = 78
+
+
+def render_full(pet: Pet, shades: list[str], *, blink: bool = False):
+    """The drawn creature with its readout beside it.
+
+    Rich renderable rather than a string: the art is coloured per row and the
+    status has to line up next to it without either being padded by hand.
+    """
+    from rich.table import Table
+    from rich.text import Text
+
+    from .pet_art import coloured
+
+    art = coloured(pet.mood, shades, blink=blink)
+    colour = MOOD_COLOUR.get(pet.mood, "white")
+
+    # No manual padding: the grid column is vertically centred, and doing
+    # both leaves the text sitting below the bear it belongs to.
+    status = Text()
+    status.append_text(Text.from_markup(f"[bold {colour}]{pet.mood}[/]  "))
+    status.append_text(Text.from_markup(f"[italic]{pet.blurb}[/]\n\n"))
+    for note in pet.notes:
+        status.append_text(Text.from_markup(f"[dim]{note}[/]\n"))
+
+    layout = Table.grid(padding=(0, 3))
+    layout.add_column()
+    layout.add_column(vertical="middle")
+    layout.add_row(Text.from_markup("\n".join(art)), status)
+    return layout

@@ -931,6 +931,7 @@ def theme(
 def pet(
     watch: bool = typer.Option(False, "--watch", help="Stay open and keep looking"),
     line_only: bool = typer.Option(False, "--line", help="One line, for a status bar"),
+    compact: bool = typer.Option(False, "--compact", help="Just the face, no drawing"),
     as_json: bool = typer.Option(False, "--json", help="The numbers behind the face"),
     db: str = DB_OPT,
 ) -> None:
@@ -941,10 +942,12 @@ def pet(
     memory debt sits there for a week. The pet cannot look happy while a check
     is failing, which is the only reason it is worth having.
     """
-    from .pet import assess, line, render
+    from .banner import hero_shades
+    from .pet import FULL_MIN_WIDTH, assess, line, render, render_full
 
     store, _ = _stores(db)
     creature = assess(store)
+    full = console.width >= FULL_MIN_WIDTH and not compact
 
     if as_json:
         print(json.dumps({"mood": creature.mood, "face": creature.face,
@@ -953,9 +956,13 @@ def pet(
     if line_only:
         print(line(creature))
         return
+    def frame(blink: bool = False):
+        return (render_full(creature, hero_shades(), blink=blink) if full
+                else _render_text(render(creature, blink=blink)))
+
     if not watch:
         console.print()
-        console.print(render(creature))
+        console.print(frame())
         console.print()
         return
 
@@ -969,9 +976,11 @@ def pet(
         with Live(console=console, refresh_per_second=4, transient=False) as live:
             while True:
                 creature = assess(store)
-                live.update(_render_text(render(creature, blink=blink)))
+                live.update(frame(blink))
                 blink = not blink
-                time.sleep(1.2 if blink else 4.0)
+                # A blink is short and the gap between them is long, which is
+                # the difference between a creature and a flashing cursor.
+                time.sleep(0.18 if blink else 3.5)
     except KeyboardInterrupt:
         console.print("[dim]bye[/]")
 

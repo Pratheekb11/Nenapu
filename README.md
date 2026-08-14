@@ -187,31 +187,53 @@ week.
 ```
 $ nenapu pet
 
-    ᐡ×ᴥ×ᐡ ?   1 thing it believed stopped being true
-
-      12 facts, 3 learned today
-      last fed just now, last observed a session 14m ago
-      a check that used to pass is failing — nenapu loops
+⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀
+⠀⣴⡾⠛⠙⠻⣶⡄⠀⠀⠀⠀⠀⠀⠀⣴⡾⠛⠙⠻⣶⡄⠀
+⢸⣿⣧⣀⢀⣠⣿⣿⠀⠀⠀⠀⠀⠀⢸⣿⣧⣀⢀⣠⣿⣿⠀
+⠈⢿⣿⣿⡿⢟⣫⣥⡶⢶⣶⣷⣶⠶⣦⣭⣛⠿⣿⣿⣿⠏⠀
+⠀⠀⠈⢉⣴⠿⢋⣉⣴⣾⣿⣿⣿⣶⣌⣉⠻⢷⣌⠉⠀⠀⠀
+⠀⠀⣰⣿⣿⣦⡙⠿⢋⣴⣿⣿⣿⣦⡙⠿⢃⣴⣿⣷⡀⠀⠀
+⠀⠀⣿⣿⣿⡿⢋⣤⡙⢿⣿⣿⣿⡿⢋⣤⡙⢿⣿⣿⡇⠀⠀   sick   1 thing it believed stopped being true
+⠀⠈⣿⣿⣿⣶⣿⣿⡿⠖⣻⣿⡛⠶⣿⣿⣿⣶⣿⣿⡏⠀⠀
+⠀⠀⢻⣿⣿⣿⣿⠃⠀⠈⢻⣿⠋⠀⠀⢻⣿⣿⣿⣿⠃⠀⠀   12 facts, 3 learned today
+⠀⠀⠀⠙⢿⣿⣿⣆⡀⠐⢿⣿⠗⠀⣀⣾⣿⣿⠟⠁⠀⠀⠀   last fed just now, last observed a session 14m ago
+⠀⠀⠀⠀⠀⠙⠻⠿⣿⣷⣶⣶⣶⣿⡿⠿⠛⠁⠀⠀⠀⠀⠀   a check that used to pass is failing — nenapu loops
+⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣤⣥⣤⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⣠⣴⣤⡀⢠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⠀⣠⣴⣤⡀⠀
+⢸⣿⣿⣿⢠⣿⣿⣿⣿⣿⠿⠿⢿⣿⣿⣿⣿⣧⢸⣿⣿⣿⠀
+⢹⣿⣿⣷⠸⣿⣿⣿⡟⠀⠀⠀⠀⠘⣿⣿⣿⡿⢰⣿⣿⣿⠁
+⠈⠻⢿⠿⠂⠹⣿⣿⣷⣀⠀⠀⢀⣰⣿⣿⡿⠁⠺⢿⠿⠋⠀
+⠀⠀⠀⣤⣶⣶⣦⣉⡛⠿⠿⠿⠿⠟⣋⣡⣶⣶⣦⡄⠀⠀⠀
+⠀⠀⠈⠿⣿⣿⣿⣿⡿⠏⠀⠀⠈⠿⣿⣿⣿⣿⡿⠏⠀⠀⠀
 ```
 
-Every mood is a real signal with a threshold you can argue with. It is hungry
-because nothing has been learned in three days — which usually means the Stop
-hook is not firing. Sick because a check that used to pass is failing. Spooked
-because a cascade knocked facts over. Drowsy because most of what it knows has
-decayed past the floor. Content only when none of that is true.
+Every mood is a real signal with a threshold you can argue with. Hungry because
+nothing has been learned in three days — which usually means the Stop hook is
+not firing. Sick because a check that used to pass is failing. Spooked because
+a cascade knocked facts over. Drowsy because most of what it knows has decayed
+past the floor. Content only when none of that is true.
 
 It cannot look happy while the store is unwell, which is the only reason it is
-worth having: a cosmetic pet teaches you to ignore it.
+worth having: a cosmetic pet teaches you to ignore it. An unwell bear is not
+drawn in your theme colour either — a calm teal bear with its eyes crossed
+still reads as fine at a glance.
+
+The bear is drawn rather than typed. Braille cells carry 2x4 dots, so the block
+above is an 88x72 bitmap assembled from ellipses, and a mood is a few pixel
+edits — eyes shut, brows down, mouth open — rather than a separate picture.
+Nine hand-typed drawings would have started drifting apart on the first change.
 
 ```bash
-nenapu pet --watch    # stay open; picks up facts written in another terminal
-nenapu pet --line     # ᐡ•ᴥ•ᐡ · 80 facts · fed 2m ago     (for a status bar)
-nenapu pet --json     # the numbers behind the face
+nenapu pet --watch      # stays open, blinks, picks up writes from other terminals
+nenapu pet --compact    # just the face
+nenapu pet --line       # ᐡ•ᴥ•ᐡ · 80 facts · fed 2m ago      (for a status bar)
+nenapu pet --json       # the numbers behind the face
 ```
 
-The face is not in the banner on every command, deliberately: assessing health
-reads every active fact, and paying for that on `nenapu list` would make the
-whole CLI feel slow to look at a bear.
+Under 78 columns it falls back to the compact face by itself. The face is not
+in the banner on every command, deliberately: assessing health reads every
+active fact, and paying for that on `nenapu list` would make the whole CLI feel
+slow in order to look at a bear.
 
 ## Editors without a hook API
 
