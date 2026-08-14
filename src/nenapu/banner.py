@@ -345,10 +345,10 @@ def mark_walked(conn: sqlite3.Connection) -> None:
 FIRST_RUN_HELP = """   Your store lives at {path}
 
    [bold]Getting started[/]
-     nenapu write "..." --kind project      remember something
-     nenapu search "..."                    recall it, ranked by belief
+     nenapu remember "..." --kind project      remember something
+     nenapu recall "..."                    recall it, ranked by belief
      nenapu why <id>                        what a memory rests on
-     nenapu loops                           what the store no longer trusts
+     nenapu doubts                           what the store no longer trusts
      nenapu doctor --calibrate              check a model before it audits
 
    Facts carrying a --verify-cmd never run until you approve them:

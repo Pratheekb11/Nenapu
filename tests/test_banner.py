@@ -100,7 +100,7 @@ def test_banner_shows_on_every_invocation(tmp_path):
 
 
 def test_banner_goes_to_stderr_so_piped_output_stays_clean(tmp_path):
-    """`nenapu search --json | jq` must receive data, not ASCII art."""
+    """`nenapu recall --json | jq` must receive data, not ASCII art."""
     result = _run(["search", "anything", "--json"], tmp_path, NENAPU_NO_BANNER="")
     assert STAMP not in result.stdout
     assert STAMP in result.stderr

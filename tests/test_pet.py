@@ -28,7 +28,7 @@ def _fact(store, text="deploys go through make ship", **kwargs):
 def test_an_empty_store_is_new_rather_than_happy(store):
     pet = assess(store)
     assert pet.mood == "new"
-    assert "nenapu write" in " ".join(pet.notes)
+    assert "nenapu remember" in " ".join(pet.notes)
 
 
 def test_a_store_with_nothing_active_left_is_not_reported_as_new(store):

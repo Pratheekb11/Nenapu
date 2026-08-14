@@ -134,7 +134,7 @@ def hook_config() -> dict:
         "Stop": [{
             "hooks": [{
                 "type": "command",
-                "command": "nenapu observe --stdin --detach",
+                "command": "nenapu learn --stdin --detach",
                 "timeout": 10,
             }],
         }],

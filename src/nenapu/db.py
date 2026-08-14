@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS journal (
 --
 -- `verify_cmd` is shell, and facts are written by agents that read untrusted
 -- input — a web page, a dependency README, a file in a cloned repo. Without
--- this table, one prompt-injected `memory_write` turns `nenapu verify` into
+-- this table, one prompt-injected `memory_write` turns `nenapu check` into
 -- scheduled remote code execution. A check does not run until its exact
 -- command appears here.
 CREATE TABLE IF NOT EXISTS approved_commands (

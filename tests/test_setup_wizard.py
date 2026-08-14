@@ -68,7 +68,7 @@ def test_install_is_idempotent(tmp_path):
     install_hooks(path)
     ok, detail = install_hooks(path)
     assert ok and "already" in detail
-    assert json.dumps(json.loads(path.read_text())).count("nenapu observe") == 1
+    assert json.dumps(json.loads(path.read_text())).count("nenapu learn") == 1
 
 
 def test_a_backup_is_written_before_an_existing_file_is_touched(tmp_path):
@@ -170,7 +170,7 @@ def test_a_stale_hook_from_an_earlier_version_is_replaced(tmp_path):
     """
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"hooks": {"Stop": [
-        {"hooks": [{"type": "command", "command": "nenapu observe --stdin", "timeout": 60}]},
+        {"hooks": [{"type": "command", "command": "nenapu learn --stdin", "timeout": 60}]},
     ]}}))
 
     ok, detail = install_hooks(path)
@@ -186,7 +186,7 @@ def test_replacing_ours_leaves_someone_elses_hook_on_the_same_event(tmp_path):
     theirs = {"hooks": [{"type": "command", "command": "make lint"}]}
     path.write_text(json.dumps({"hooks": {"Stop": [
         theirs,
-        {"hooks": [{"type": "command", "command": "nenapu observe --stdin", "timeout": 60}]},
+        {"hooks": [{"type": "command", "command": "nenapu learn --stdin", "timeout": 60}]},
     ]}}))
 
     install_hooks(path)

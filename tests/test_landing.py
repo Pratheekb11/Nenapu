@@ -91,7 +91,7 @@ def test_a_narrow_terminal_truncates_nothing_it_wrote_as_prose(store):
     lines = [line for line in render(72, 30, store) if "store" not in line]
 
     assert "…" not in "\n".join(lines)
-    assert "search" in "\n".join(lines)
+    assert "recall" in "\n".join(lines)
 
 
 def test_every_command_is_named_somewhere(store):
@@ -102,7 +102,7 @@ def test_every_command_is_named_somewhere(store):
 
     for name in listed:
         assert name in text, f"{name} is registered but never shown"
-    assert "write" in listed and "pet" in listed
+    assert "remember" in listed and "pet" in listed
 
 
 def test_the_command_list_is_read_from_the_app(store):

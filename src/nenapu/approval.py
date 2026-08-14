@@ -4,7 +4,7 @@
 most dangerous thing in the system: it is shell, stored in a row that an agent
 can write. Agents read untrusted input all day — a README in a cloned repo, a
 web page, a tool result — so "the agent decided to store this command" is not a
-trust signal. Without a gate, one injected `memory_write` makes `nenapu verify`
+trust signal. Without a gate, one injected `memory_write` makes `nenapu check`
 into a scheduled remote-code-execution primitive running unattended with the
 user's privileges.
 

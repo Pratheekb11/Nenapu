@@ -65,7 +65,7 @@ Claude Code hooks are the exception, and the whole design now rests on them:
 | hook | command | what it does |
 |---|---|---|
 | `SessionStart` | `nenapu recall-hook` | prints memory to stdout; the harness puts it in the model's context. The agent reads it without asking. |
-| `Stop` | `nenapu observe --stdin --detach` | reads the finished transcript, extracts corrections and decisions, writes them. |
+| `Stop` | `nenapu learn --stdin --detach` | reads the finished transcript, extracts corrections and decisions, writes them. |
 
 MCP is kept for Cursor/VS Code/Codex, which have no hook API. It is the weaker
 mode and the docs say so.
@@ -106,7 +106,7 @@ are exempt on purpose. A suspect fact is penalised *because* its foundation
 fell, which pushes it under the floor and silences the warning exactly when it
 matters most. They are listed separately, under "do not rely on these", never
 mixed into what the agent is told it knows. Without this the falsification
-cascade would be visible in `nenapu loops` and invisible where decisions are
+cascade would be visible in `nenapu doubts` and invisible where decisions are
 actually made.
 
 ### Consent
@@ -123,7 +123,7 @@ The hooks were wired, the tests were green, and the layer was still learning
 nothing. Each of these was found by running it, not by reading it.
 
 **An installed hook is a version too.** The `Stop` hook on this machine still
-read `nenapu observe --stdin` with a 60-second timeout — the exact
+read `nenapu learn --stdin` with a 60-second timeout — the exact
 silently-killed configuration `--detach` was written to fix. `install_hooks`
 matched on "does an entry mention nenapu" and skipped, so no upgrade would ever
 have repaired it. It now compares against the config it wants and replaces its
@@ -247,7 +247,7 @@ produced identical overall accuracy with the errors merely redistributed.
 ## Security: executable checks are gated
 
 `verify_cmd` is shell, and facts are written by agents that read untrusted
-input. Without a gate, one prompt-injected `memory_write` turns `nenapu verify`
+input. Without a gate, one prompt-injected `memory_write` turns `nenapu check`
 into scheduled remote code execution.
 
 - Nothing runs until a human approves that exact command.
@@ -380,6 +380,31 @@ The tests print the view at a dozen terminal sizes and assert it fits every
 one. They immediately found a second truncation: the three-line pitch is
 hand-set at 76 characters, so under 82 columns Rich cut it mid-sentence, which
 reads as a bug rather than as a summary. It is dropped below that width now.
+
+## The command names are plain words
+
+Nine were renamed: `write` → `remember`, `search` → `recall`, `verify` →
+`check`, `loops` → `doubts`, `distill` → `tidy`, `observe` → `learn`, `good` →
+`helped`, `bad` → `misled`, `outcome` → `grade`.
+
+The old names were the vocabulary of the implementation rather than of the
+person typing them. `loops` meant unresolved memory debt to whoever wrote the
+graph code and meant nothing to anyone else; `distill` was the deduplication
+pass; `observe` was reading a transcript. Someone reaching for this at a prompt
+is trying to say *remember this*, *what did it learn*, *that one misled me*.
+
+**Every old name survives as a hidden alias.** Renaming commands in a tool
+people have already wired into hooks and shell scripts is a breaking change
+unless the old word keeps working — and the aliases are hidden rather than
+listed because an advertised alias puts every renamed command on the screen
+twice, which is worse than the jargon it replaced.
+
+Two names deliberately did not change. `recall-hook` is written into
+`~/.claude/settings.json` on every machine that has run `nenapu init`, and
+renaming it would break memory injection silently: the session would simply
+start knowing nothing. `init`, `doctor` and `serve` are conventions people
+already know from other tools, and inventing new words for them would be
+originality in the wrong place.
 
 ## Things still open
 

@@ -63,7 +63,7 @@ def test_first_bare_run_sets_up_and_explains(tmp_path):
     assert "Found on this machine" in result.stdout or \
            "No supported agent" in result.stdout
     assert "What you type" in result.stdout
-    assert "nenapu search" in result.stdout
+    assert "nenapu recall" in result.stdout
 
 
 def test_the_second_run_shows_commands_instead(tmp_path):

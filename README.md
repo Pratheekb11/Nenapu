@@ -46,10 +46,10 @@ the same confidence. Systems grade *retrieval*. None grade *consequences*.
 ## What Nenapu does instead
 
 ```
-  $ nenapu verify
+  $ nenapu check
   fail   #1   test -d services/auth  →  exit 1
 
-  $ nenapu loops
+  $ nenapu doubts
    id   state     fact                             why
    4    suspect   new endpoints go in .../routes   rests on #1: check failed
    1    active    auth code lives in services/auth exit 1
@@ -145,7 +145,7 @@ So Nenapu does not wait to be called. Two Claude Code hooks do the work:
 
    ( you work. you correct it. )
 
-   Stop          ──▶  nenapu observe --stdin --detach
+   Stop          ──▶  nenapu learn --stdin --detach
                         the finished transcript is read in the background,
                         corrections and decisions extracted and stored
 ```
@@ -170,21 +170,28 @@ nothing.
 ## Use
 
 ```bash
-nenapu write "The API listens on port 8080" --kind environment --key api.port \
+nenapu remember "The API listens on port 8080" --kind environment --key api.port \
   --verify-cmd "curl -sf localhost:8080/health"
 
-nenapu write "The API listens on port 9090" --kind environment --key api.port
+nenapu remember "The API listens on port 9090" --kind environment --key api.port
 # conflict with #1: same key, conflicting values → superseded
 #   ...and everything derived from #1 is now suspect
 
-nenapu search "what port"    # ranked by match AND believability
+nenapu recall "what port"    # ranked by match AND believability
 nenapu why 7                 # what #7 rests on, and what rests on #7
-nenapu loops                 # what the store no longer stands behind
-nenapu verify                # re-run checks; failures cascade
+nenapu doubts                 # what the store no longer stands behind
+nenapu check                # re-run checks; failures cascade
 nenapu export ./CLAUDE.md    # materialize into a managed block
 ```
 
 Run `nenapu` alone for the full command list, grouped into five panels.
+
+The commands are plain words: `remember`, `recall`, `forget`, `check`, `learn`,
+`doubts`, `helped`, `misled`. Nine of them were renamed from jargon —
+`loops` was memory debt, `distill` was deduplication, `observe` was reading a
+transcript — and every old name still works as a hidden alias, because renaming
+a command in a tool people have wired into hooks and scripts is a breaking
+change unless the old word keeps running.
 
 ### Forgetting
 
@@ -219,7 +226,7 @@ $ nenapu pet
 ⣿⣿⣿⣿⣿⣿⡏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠤⢤⣽⣿⣿⣿⣿⣿⣿
 ⢹⣿⣿⣿⣿⡿⢁⣄⠀⠀⣠⠀⠀⠀⠀⣄⠀⠀⣠⡈⢿⣿⣿⣿⣿⡏   12 facts, 3 learned today
 ⠘⣿⣿⣿⣿⠇⠀⠙⣷⣾⠋⠀⠀⠀⠀⠙⣷⣾⠋⠀⢸⣿⣿⣿⣿⠃   last fed just now, observed a session 14m ago
-⠀⠈⠛⢿⡏⠀⠀⠾⠋⠙⠷⠀⣀⣀⠀⠾⠋⠙⠷⠀⠘⢹⡿⠛⠁⠀   a check that used to pass is failing — nenapu loops
+⠀⠈⠛⢿⡏⠀⠀⠾⠋⠙⠷⠀⣀⣀⠀⠾⠋⠙⠷⠀⠘⢹⡿⠛⠁⠀   a check that used to pass is failing — nenapu doubts
 ⠀⠀⠀⠈⣷⠀⠀⠀⠀⠀⠀⠘⢿⡿⠃⠀⠀⠀⠀⠀⠀⣾⠁⠀⠀⠀
 ⠀⠀⠀⠀⠘⣧⠀⠀⠀⠘⠳⢿⣿⣷⡿⠞⠃⠀⠀⠀⣼⠃⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠈⠳⣄⡀⠀⠀⠘⢿⡿⠃⠀⠀⢀⣠⠞⠁⠀⠀⠀⠀⠀
@@ -314,7 +321,7 @@ run again. Recall keeps working; the layer just stops learning on its own.
 ## Executable checks are gated
 
 `verify_cmd` is shell, and facts are written by agents that read untrusted
-input. Without a gate, one prompt-injected write turns `nenapu verify` into
+input. Without a gate, one prompt-injected write turns `nenapu check` into
 scheduled remote code execution.
 
 ```
@@ -337,7 +344,7 @@ sessions, so a session that read a poisoned file can still leave a *misleading*
 memory behind — not code, but something your agent will believe next week.
 Every fact carries its origin, `nenapu list` shows what was observed rather
 than stated, and `nenapu forget` retires one. Read what it learned now and then;
-`nenapu observe <file> --dry-run` shows what a transcript would produce without
+`nenapu learn <file> --dry-run` shows what a transcript would produce without
 storing anything.
 
 ## Model backends

@@ -30,7 +30,7 @@ HELP = """\
 A store, not an agent. Facts carry provenance, decay on a clock, prove
 themselves with a command, and lose standing when what they rest on falls.
 
-Start with [cyan]nenapu write[/], then [cyan]nenapu search[/]. See [cyan]nenapu loops[/] for anything
+Start with [cyan]nenapu remember[/], then [cyan]nenapu recall[/]. See [cyan]nenapu doubts[/] for anything
 the store no longer stands behind.
 """
 
@@ -46,8 +46,22 @@ app = typer.Typer(help=HELP, rich_markup_mode="rich")
 skill_app = typer.Typer(help="Skill library with an outcome loop", no_args_is_help=True)
 app.add_typer(skill_app, name="skill", rich_help_panel=UPKEEP)
 
+def alias(name: str, panel: str):
+    """Register a command under an older name, hidden from the listing.
+
+    Renaming a command in a tool people have already wired into hooks and
+    scripts is a breaking change unless the old word keeps working. The old
+    names stay, they just stop being advertised — a hidden alias costs a line
+    and an unhidden one would put every command on the screen twice.
+    """
+    def register(fn):
+        app.command(name, rich_help_panel=panel, hidden=True)(fn)
+        return fn
+    return register
+
+
 console = Console()
-# The banner goes to stderr so `nenapu search --json | jq` is never corrupted
+# The banner goes to stderr so `nenapu recall --json | jq` is never corrupted
 # by a one-time greeting.
 err_console = Console(stderr=True)
 
@@ -404,8 +418,9 @@ def version(plain: bool = typer.Option(False, "--plain", help="Version string on
     _big_panel(console, db)
 
 
-@app.command(rich_help_panel=REMEMBER)
-def write(
+@app.command("remember", rich_help_panel=REMEMBER)
+@alias("write", REMEMBER)
+def remember(
     text: str,
     kind: str = typer.Option("project", help="user|project|environment|feedback|reference"),
     scope: str = "global",
@@ -433,8 +448,9 @@ def write(
         console.print(f"[{colour}]conflict[/] with #{c.other_id}: {c.detail} -> {c.resolution}")
 
 
-@app.command(rich_help_panel=REMEMBER)
-def search(
+@app.command("recall", rich_help_panel=REMEMBER)
+@alias("search", REMEMBER)
+def recall(
     query: str,
     scope: str = typer.Option("", help="Limit to a scope"),
     limit: int = 10,
@@ -579,8 +595,9 @@ def forget(fact_id: str,
     console.print(f"[yellow]retired[/] #{fact_id}")
 
 
-@app.command(rich_help_panel=UPKEEP)
-def verify(
+@app.command("check", rich_help_panel=UPKEEP)
+@alias("verify", UPKEEP)
+def check(
     fact_id: int = typer.Option(0, help="Verify one fact instead of a whole scope"),
     scope: str = "",
     stale_after_days: float = typer.Option(0.0, help="Skip checks that ran recently"),
@@ -630,7 +647,7 @@ def approve(
 
     A `verify_cmd` is shell, and facts are written by agents that read
     untrusted input. Nothing runs until a human has read the exact command, so
-    a prompt injection that plants a fact cannot turn `nenapu verify` into
+    a prompt injection that plants a fact cannot turn `nenapu check` into
     scheduled code execution.
     """
     from .approval import approve as record_approval
@@ -738,8 +755,9 @@ def audit(
         console.print(f"[red]model invented ids:[/] {report.invented} (ignored)")
 
 
-@app.command(rich_help_panel=UPKEEP)
-def distill(
+@app.command("tidy", rich_help_panel=UPKEEP)
+@alias("distill", UPKEEP)
+def tidy(
     scope: str = "",
     token_budget: int = 1500,
     no_llm: bool = typer.Option(False, help="Dedupe only, no model call"),
@@ -814,8 +832,9 @@ def link(parent_id: int, child_id: int, db: str = DB_OPT) -> None:
     console.print(f"[green]linked[/] #{child_id} rests on #{parent_id}" if edge else "already linked")
 
 
-@app.command(rich_help_panel=NETWORK)
-def loops(limit: int = 20, db: str = DB_OPT) -> None:
+@app.command("doubts", rich_help_panel=NETWORK)
+@alias("loops", NETWORK)
+def doubts(limit: int = 20, db: str = DB_OPT) -> None:
     """Unresolved memory debt: contradicted, unsupported, or failing facts."""
     store, _ = _stores(db)
     rows = store.conn.execute(
@@ -837,16 +856,18 @@ def loops(limit: int = 20, db: str = DB_OPT) -> None:
     console.print(f"[dim]{len(store.ledger.pending(limit=500))} recalls awaiting a grade[/]")
 
 
-@app.command(rich_help_panel=OUTCOMES)
-def good(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
+@app.command("helped", rich_help_panel=OUTCOMES)
+@alias("good", OUTCOMES)
+def helped(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
     """Mark a recall as having helped."""
     store, _ = _stores(db)
     ok = store.ledger.grade(recall_id, "good", source="human", note=note or None)
     console.print("[green]graded good[/]" if ok else "[dim]already graded, or no such recall[/]")
 
 
-@app.command(rich_help_panel=OUTCOMES)
-def bad(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
+@app.command("misled", rich_help_panel=OUTCOMES)
+@alias("bad", OUTCOMES)
+def misled(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
     """Mark a recall as having misled you. The fact loses standing."""
     store, _ = _stores(db)
     recall = store.ledger.get(recall_id)
@@ -860,8 +881,9 @@ def bad(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
         console.print("[dim]already graded[/]")
 
 
-@app.command(rich_help_panel=OUTCOMES)
-def outcome(
+@app.command("grade", rich_help_panel=OUTCOMES)
+@alias("outcome", OUTCOMES)
+def grade(
     session_id: str,
     success: bool = typer.Option(..., "--success/--failure"),
     note: str = "",
@@ -935,7 +957,7 @@ def _open_observe_log(path: Path):
 
 
 def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
-    """Spawn a fully detached `nenapu observe` and do not wait for it.
+    """Spawn a fully detached `nenapu learn` and do not wait for it.
 
     `start_new_session` puts the child in its own process group, so the
     harness tearing down the session's process tree does not take the
@@ -972,8 +994,9 @@ def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
         pass  # a hook must never break the session it is attached to
 
 
-@app.command(rich_help_panel=UPKEEP)
-def observe(
+@app.command("learn", rich_help_panel=UPKEEP)
+@alias("observe", UPKEEP)
+def learn(
     transcript: str = typer.Argument("", help="Transcript to read; omit with --stdin"),
     from_stdin: bool = typer.Option(False, "--stdin", help="Read the hook payload on stdin"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be stored"),
@@ -1068,7 +1091,7 @@ def _setup_walkthrough(console_out, *, yes: bool = False) -> None:
     found = detected()
     if not found:
         console_out.print("  [yellow]No supported agent found on this machine.[/]")
-        console_out.print("  [dim]Nenapu still works standalone: nenapu write / search.[/]\n")
+        console_out.print("  [dim]Nenapu still works standalone: nenapu remember / search.[/]\n")
         return
 
     console_out.print("  [bold]Found on this machine[/]\n")
@@ -1137,17 +1160,17 @@ GUIDE = [
     ]),
     ("What you type", [
         ("nenapu list", "everything it has learned"),
-        ("nenapu search \"port\"", "recall, by match and by belief"),
-        ("nenapu write \"...\"", "tell it something yourself"),
+        ("nenapu recall \"port\"", "recall, by match and by belief"),
+        ("nenapu remember \"...\"", "tell it something yourself"),
     ]),
     ("When a memory is wrong", [
         ("nenapu forget <id>", "retire one; nothing is deleted"),
-        ("nenapu loops", "what it no longer stands behind"),
+        ("nenapu doubts", "what it no longer stands behind"),
         ("nenapu why <id>", "what it rests on, and rests on it"),
     ]),
     ("Checking on it", [
         ("nenapu pet", "how the store is doing, with a face on it"),
-        ("nenapu observe <file> --dry-run", "what it would learn"),
+        ("nenapu learn <file> --dry-run", "what it would learn"),
         ("nenapu doctor --calibrate", "prove the model can audit"),
         ("nenapu approve", "no check runs until you say so"),
     ]),

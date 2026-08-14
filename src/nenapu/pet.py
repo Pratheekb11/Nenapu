@@ -142,20 +142,20 @@ def assess(store) -> Pet:
     # this module's own tests found.
     if sum(s.get("by_status", {}).values()) == 0:
         return Pet("new", FACES["new"], "brand new, and knows nothing yet",
-                   ["tell it something: nenapu write \"...\"",
+                   ["tell it something: nenapu remember \"...\"",
                     "or let it watch: nenapu init"], stats)
 
     if failing:
         return Pet("sick", FACES["sick"],
                    f"{failing} thing{'s' if failing > 1 else ''} it believed "
                    f"stopped being true",
-                   notes + ["a check that used to pass is failing — nenapu loops"], stats)
+                   notes + ["a check that used to pass is failing — nenapu doubts"], stats)
 
     if suspect:
         return Pet("spooked", FACES["spooked"],
                    f"{suspect} fact{'s' if suspect > 1 else ''} lost the ground "
                    f"{'they' if suspect > 1 else 'it'} stood on",
-                   notes + ["something they rested on was falsified — nenapu loops"], stats)
+                   notes + ["something they rested on was falsified — nenapu doubts"], stats)
 
     if fed_ago is not None and fed_ago > HUNGRY_AFTER_DAYS * DAY:
         return Pet("hungry", FACES["hungry"],
@@ -167,17 +167,17 @@ def assess(store) -> Pet:
         return Pet("drowsy", FACES["drowsy"],
                    f"{stale} of {active} facts have gone cold",
                    notes + ["belief decays on purpose; re-verify or forget them "
-                            "— nenapu verify"], stats)
+                            "— nenapu check"], stats)
 
     if active > STUFFED_FACTS:
         return Pet("stuffed", FACES["stuffed"], f"carrying {active} facts around",
                    notes + ["a lot of that is probably the same thing twice "
-                            "— nenapu distill"], stats)
+                            "— nenapu tidy"], stats)
 
     if pending > RESTLESS_PENDING:
         return Pet("restless", FACES["restless"],
                    f"waiting to hear whether {pending} recalls helped",
-                   notes + ["grading is what keeps recall honest — nenapu outcome"], stats)
+                   notes + ["grading is what keeps recall honest — nenapu grade"], stats)
 
     mean = s.get("mean_confidence", 0.0)
     if mean >= 0.7 and fresh["learned_today"]:
