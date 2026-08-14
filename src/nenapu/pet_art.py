@@ -1,265 +1,119 @@
 """The creature, drawn.
 
-Braille cells carry 2x4 dots each, so a 40-column block of text is a 80x64
-bitmap — enough resolution for something that reads as an animal rather than as
-punctuation. The alternative was hand-typing fifteen lines of ⣿⣦⠿ per mood,
-which is unmaintainable the moment an eye needs to move one dot to the left.
+This is the fourth composition and the second technique. The first three were
+braille bitmaps — a filled silhouette, then chibi proportions, then outlines
+with the eyes as the only filled shapes. Braille packs 2x4 dots per cell, which
+sounds like plenty of resolution and is not: every curve lands on a different
+dot pattern, so a smooth outline arrives as a row of unrelated glyphs and the
+whole thing reads as something photocopied badly. The verdicts were "looks
+pirated" and "still ugly", and both were right.
 
-So the dog is drawn instead: outlines and arcs, with the eyes as the only
-large filled shapes on it. A mood is then a handful of pixel edits — eyes shut,
-mouth open, brows down, tongue out — rather than a separate picture, which is
-what keeps nine moods from becoming nine drawings that slowly stop matching.
+Line art in ordinary characters has far less resolution and looks better,
+because the characters were drawn by a type designer. A `/` is a clean diagonal
+at any size; the braille approximation of the same diagonal is a staircase of
+`⣠⣴⣾`. So the dog is set out of pieces that are already well drawn, and the
+only thing generated is the arithmetic that keeps the frame aligned.
+
+Every row is built by placing characters at computed columns rather than typed
+as a literal, because a hand-typed frame drifts the moment one mood needs a
+wider mouth than another — and a drawing whose right edge wobbles by a column
+is exactly what looked cheap about the earlier attempts.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-# Braille dots are numbered down the left column then down the right, with the
-# fourth row tacked on the end by the 8-dot extension — hence the ordering.
-_DOTS = {(0, 0): 0x01, (0, 1): 0x02, (0, 2): 0x04, (0, 3): 0x40,
-         (1, 0): 0x08, (1, 1): 0x10, (1, 2): 0x20, (1, 3): 0x80}
-
-CELL_W, CELL_H = 2, 4
+WIDTH = 34                 # the frame at its smallest
+LEFT, RIGHT = 2, 31        # the columns the head's sides sit in
+EAR = 4                    # inset of the ears from the frame edge
 
 
-@dataclass
-class Canvas:
-    width: int
-    height: int
-
-    def __post_init__(self) -> None:
-        self.px = [[0] * self.width for _ in range(self.height)]
-
-    def set(self, x: int, y: int, on: int = 1) -> None:
-        if 0 <= x < self.width and 0 <= y < self.height:
-            self.px[y][x] = on
-
-    def ellipse(self, cx: float, cy: float, rx: float, ry: float, on: int = 1) -> None:
-        for y in range(int(cy - ry) - 1, int(cy + ry) + 2):
-            for x in range(int(cx - rx) - 1, int(cx + rx) + 2):
-                if rx <= 0 or ry <= 0:
-                    continue
-                if ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0:
-                    self.set(x, y, on)
-
-    def ring(self, cx: float, cy: float, rx: float, ry: float,
-             thickness: float = 1.6, on: int = 1) -> None:
-        self.ellipse(cx, cy, rx, ry, on)
-        self.ellipse(cx, cy, rx - thickness, ry - thickness, 0 if on else 1)
-
-    def arc(self, cx: float, cy: float, rx: float, ry: float,
-            start: float, end: float, thickness: float = 1.2, on: int = 1) -> None:
-        """A stroked piece of an ellipse, in radians clockwise from 3 o'clock.
-
-        Line art needs open curves — a smile, a tail, the top of a paw — and an
-        outline is the wrong tool for those because it always closes.
-        """
-        import math
-
-        steps = max(12, int((end - start) * max(rx, ry)))
-        for i in range(steps + 1):
-            angle = start + (end - start) * i / steps
-            self.ellipse(cx + rx * math.cos(angle), cy + ry * math.sin(angle),
-                         thickness, thickness, on)
-
-    def bar(self, x0: int, y0: int, x1: int, y1: int, on: int = 1) -> None:
-        for y in range(min(y0, y1), max(y0, y1) + 1):
-            for x in range(min(x0, x1), max(x0, x1) + 1):
-                self.set(x, y, on)
-
-    def to_braille(self) -> list[str]:
-        rows = []
-        for cy in range(0, self.height, CELL_H):
-            row = []
-            for cx in range(0, self.width, CELL_W):
-                bits = 0
-                for (dx, dy), value in _DOTS.items():
-                    y, x = cy + dy, cx + dx
-                    if y < self.height and x < self.width and self.px[y][x]:
-                        bits |= value
-                row.append(chr(0x2800 + bits))
-            rows.append("".join(row))
-        return _crop(rows)
+def _blank(width: int) -> list[str]:
+    return [" "] * width
 
 
-BLANK = chr(0x2800)  # not a space: `strip()` will not touch it
+def _place(cells: list[str], at: int, text: str) -> list[str]:
+    for i, char in enumerate(text):
+        if 0 <= at + i < len(cells):
+            cells[at + i] = char
+    return cells
 
 
-def _crop(rows: list[str]) -> list[str]:
-    """Trim the empty margin around the drawing.
+class Frame:
+    """The head's geometry at a given width.
 
-    The canvas is sized for the shapes rather than for the result, so a dog
-    that does not fill it arrives inside a wide frame of blank braille. That is
-    not whitespace — `⠀` is U+2800 and `strip()` leaves it alone — so it
-    silently eats terminal width and pushes the status column off the screen.
-    """
-    inked = [i for i, row in enumerate(rows) if set(row) != {BLANK}]
-    if not inked:
-        return [""]
-    rows = rows[inked[0]:inked[-1] + 1]
-    left = min(len(row) - len(row.lstrip(BLANK)) for row in rows)
-    right = min(len(row) - len(row.rstrip(BLANK)) for row in rows)
-    return [row[left:len(row) - right] for row in rows]
-
-
-# 84x58 dots is 42 columns by 15 text rows at scale 1.0, and the drawing grows
-# from there. The composition went through a filled silhouette and a head on a
-# body before this one; both failed the same way, with parts competing for a
-# small canvas until every feature turned to mush. So there is no body. The
-# face fills the frame, which is the pose every cute animal drawing uses and
-# the reason it works: the eyes get to be enormous and nothing else is asking
-# for room.
-W, H = 84, 58
-STROKE = 1.1
-
-
-class Geom:
-    """Every measurement in the drawing, at a given scale.
-
-    The dog is drawn from numbers rather than typed, so a bigger one is a
-    multiplication rather than a second picture. A terminal with forty rows to
-    spare should not be looking at the same postage stamp as one with twenty.
+    Widening is the only way this drawing grows: it is seven rows tall by
+    construction, and a taller one would mean a second set of hand-set pieces
+    that slowly stopped matching the first. Rows the dog cannot use are better
+    spent on what the store has learned anyway.
     """
 
-    def __init__(self, scale: float = 1.0) -> None:
-        self.scale = scale
-        self.width, self.height = round(W * scale), round(H * scale)
-        self.cx, self.cy = self.width / 2, 27 * scale
-        self.rx, self.ry = 25 * scale, 21 * scale
-        # Strokes thicken with the drawing but not proportionally: a hairline
-        # disappears when everything around it grows, and a scaled-up outline
-        # turns into a tube.
-        self.stroke = STROKE * max(1.0, scale * 0.8)
+    def __init__(self, width: int = WIDTH) -> None:
+        self.width = max(WIDTH, width)
+        self.left = LEFT
+        self.right = self.width - (WIDTH - RIGHT)
+        self.span = self.right - self.left - 1
 
-    def s(self, value: float) -> float:
-        return value * self.scale
+    def blank(self) -> list[str]:
+        return _blank(self.width)
 
+    def walls(self, cells: list[str]) -> list[str]:
+        return _place(_place(cells, self.left, "|"), self.right, "|")
 
-def _body(c: Canvas, g: Geom) -> None:
-    """Ears and head. Everything that never changes with mood.
-
-    Ears hang off the top corners, filled, and they are the only heavy shapes
-    besides the eyes: outlined ears made the whole thing read as a balloon.
-    """
-    for side in (-1, 1):
-        c.ellipse(g.cx + side * g.s(23), g.cy - g.s(2), g.s(9), g.s(15), 0)
-        c.ellipse(g.cx + side * g.s(23), g.cy - g.s(2), g.s(8), g.s(14))
-
-    c.ellipse(g.cx, g.cy, g.rx + g.s(1.6), g.ry + g.s(1.6), 0)
-    c.ring(g.cx, g.cy, g.rx, g.ry, g.stroke + g.s(0.5))
+    def centred(self, text: str) -> list[str]:
+        start = self.left + 1 + (self.span - len(text)) // 2
+        return self.walls(_place(self.blank(), start, text))
 
 
-def _muzzle(c: Canvas, g: Geom, *, open_mouth: bool = False,
-            smile: bool = True) -> None:
-    """A tiny nose set low, and a mouth of two small arcs.
-
-    Small is the whole point. A long muzzle is what makes a drawn dog look like
-    an animal rather than like a puppy.
-    """
-    import math
-
-    c.ellipse(g.cx, g.cy + g.s(9), g.s(3.2), g.s(2.4))              # nose
-    c.bar(round(g.cx), round(g.cy + g.s(11)),
-          round(g.cx), round(g.cy + g.s(13)))                       # philtrum
-
-    if open_mouth:
-        c.ellipse(g.cx, g.cy + g.s(15), g.s(3.6), g.s(3.2), 0)
-        c.ring(g.cx, g.cy + g.s(15), g.s(3.6), g.s(3.2), g.stroke)
-        return
-    if smile:
-        for side in (-1, 1):
-            c.arc(g.cx + side * g.s(4), g.cy + g.s(11), g.s(4), g.s(3.2),
-                  0.15, math.pi - 0.15, g.stroke)
-        c.ellipse(g.cx, g.cy + g.s(17), g.s(2.6), g.s(2.8))         # tongue
-    else:
-        for side in (-1, 1):
-            c.arc(g.cx + side * g.s(4), g.cy + g.s(16), g.s(4), g.s(3.2),
-                  math.pi + 0.15, 2 * math.pi - 0.15, g.stroke)
-
-
-def _eyes(c: Canvas, g: Geom, style: str) -> None:
-    """Big, filled, low on the face, with a catchlight beside the pupil.
-
-    They are the only large dark shapes on an empty face, which is what makes
-    it read as looking back rather than as a circle with marks in it.
-    """
-    import math
-
-    left, right, y = g.cx - g.s(11), g.cx + g.s(11), g.cy + g.s(2)
-    if style == "closed":                                           # happy arcs
-        for cx in (left, right):
-            c.arc(cx, y - g.s(2), g.s(5.5), g.s(4.5), 0.2, math.pi - 0.2,
-                  g.stroke + g.s(0.2))
-        return
-    if style == "cross":
-        span = round(g.s(5))
-        for cx in (left, right):
-            for d in range(-span, span + 1):
-                for t in range(max(1, round(g.scale))):
-                    c.set(round(cx) + d + t, round(y + d))
-                    c.set(round(cx) + d + t, round(y - d))
-        return
-    rx = g.s({"wide": 7.0, "normal": 6.0, "narrow": 6.0}[style])
-    ry = rx * (0.28 if style == "narrow" else 1.2)
-    for cx in (left, right):
-        c.ellipse(cx, y, rx, ry)
-    # The catchlight goes beside the eye, not inside it. Punched out of the
-    # fill it reads as a crack: braille has no grey to soften a hole with, so
-    # a bite out of the eye is simply a chunk missing.
-    if style != "narrow":
-        for cx in (left, right):
-            c.ellipse(cx - rx * 0.55, y - ry * 0.75, g.s(1.4), g.s(1.4), 0)
-
-
-def _brows(c: Canvas, g: Geom, angle: str) -> None:
-    """Worry is mostly eyebrows. Without them every mood is mildly surprised."""
-    if angle == "none":
-        return
-    span = round(g.s(5))
-    for side, cx in ((-1, g.cx - g.s(11)), (1, g.cx + g.s(11))):
-        for dx in range(-span, span + 1):
-            drop = round(dx * side * 0.7) * (1 if angle == "down" else -1)
-            for t in range(max(2, round(g.s(2)))):
-                c.set(round(cx) + dx, round(g.cy - g.s(11)) + drop + t)
-
-
-# Each mood is the same dog with a different face. Nothing here draws a new
-# animal, which is what stops the nine of them drifting apart.
+# Each mood is the same dog with a different face: two eyes, a mouth, and
+# eyebrows when something is wrong. Nothing here draws a second animal, which
+# is what stops nine moods from drifting apart.
 FACE_BY_MOOD = {
-    "sick":      dict(eyes="cross",  brows="down", mouth="open",  smile=False),
-    "spooked":   dict(eyes="wide",   brows="up",   mouth="open",  smile=False),
-    "hungry":    dict(eyes="normal", brows="up",   mouth="open",  smile=False),
-    "drowsy":    dict(eyes="closed", brows="none", mouth="line",  smile=True),
-    "restless":  dict(eyes="narrow", brows="up",   mouth="line",  smile=False),
-    "stuffed":   dict(eyes="closed", brows="none", mouth="line",  smile=True),
-    "content":   dict(eyes="normal", brows="none", mouth="line",  smile=True),
-    "delighted": dict(eyes="closed", brows="up",   mouth="line",  smile=True),
-    "new":       dict(eyes="normal", brows="none", mouth="line",  smile=True),
+    "sick":      dict(eye="✕", mouth="(··)", brow="__"),
+    "spooked":   dict(eye="◉", mouth=" OO ", brow="''"),
+    "hungry":    dict(eye="●", mouth=" ᗢ  ", brow=None),
+    "drowsy":    dict(eye="˘", mouth=" ‿‿ ", brow=None),
+    "restless":  dict(eye="˙", mouth=" ~~ ", brow=None),
+    "stuffed":   dict(eye="─", mouth=" ‿‿ ", brow=None),
+    "content":   dict(eye="●", mouth="\\__/", brow=None),
+    "delighted": dict(eye="^", mouth="\\ᵕ/ ", brow=None),
+    "new":       dict(eye="·", mouth=" ·· ", brow=None),
 }
+
+# Moods that are already squinting or crossed keep their face when blinking: a
+# sleeping dog that flickers reads as a glitch rather than as a dog.
+NO_BLINK = {"drowsy", "stuffed", "sick", "delighted"}
 
 
 def draw(mood: str, *, blink: bool = False, scale: float = 1.0) -> list[str]:
-    """The dog, as braille rows.
+    """The dog, as rows of text.
 
-    `blink` shuts whatever eyes are open. `scale` grows the whole drawing —
-    every measurement is a multiplication of one, which is the point of having
-    drawn it rather than typed it.
+    `scale` widens the frame; the height is fixed at seven rows. `blink` shuts
+    whatever eyes were open.
     """
-    face = FACE_BY_MOOD.get(mood, FACE_BY_MOOD["content"])
-    g = Geom(scale)
-    canvas = Canvas(g.width, g.height)
-    _body(canvas, g)
-    _muzzle(canvas, g, open_mouth=face["mouth"] == "open", smile=face["smile"])
-    _eyes(canvas, g, "closed" if (blink and face["eyes"] not in ("closed", "cross"))
-          else face["eyes"])
-    _brows(canvas, g, face["brows"])
-    return canvas.to_braille()
+    face = dict(FACE_BY_MOOD.get(mood, FACE_BY_MOOD["content"]))
+    if blink and mood not in NO_BLINK:
+        face["eye"] = "─"
+    f = Frame(round(WIDTH * scale))
+    eye, mouth, brow = face["eye"], face["mouth"], face["brow"]
+    gap = " " * max(6, f.span // 4)
+
+    rows = [
+        _place(_place(f.blank(), EAR, ",__,"), f.width - EAR - 4, ",__,"),
+        _place(f.blank(), EAR - 1,
+               "/    \\" + "_" * (f.width - 2 * EAR - 10) + "/    \\"),
+        f.centred(f"{brow}{gap}{brow}") if brow else f.walls(f.blank()),
+        f.centred(f"{eye}{gap}{eye}"),
+        f.centred("▾"),
+        _place(_place(_place(f.blank(), f.left + 1, "\\"), f.right - 1, "/"),
+               f.left + 1 + (f.span - len(mouth)) // 2, mouth),
+        _place(f.blank(), f.left + 1, "'-." + "_" * (f.span - 6) + ".-'"),
+    ]
+    return ["".join(row).rstrip() for row in rows]
 
 
 # Moods with something wrong get their own colour rather than the theme's: the
-# whole point of the creature is that a bad store cannot look like a good one,
-# and a teal dog with its eyes crossed still reads as fine at a glance.
+# point of the creature is that a bad store cannot look like a good one, and a
+# calm teal dog with its eyes crossed still reads as fine at a glance.
 MOOD_SHADES = {
     "sick": ["#FCA5A5", "#F87171", "#EF4444", "#DC2626", "#B91C1C", "#991B1B"],
     "spooked": ["#FDE68A", "#FCD34D", "#FBBF24", "#F59E0B", "#D97706", "#B45309"],
@@ -267,29 +121,33 @@ MOOD_SHADES = {
 }
 
 ACCENTS = {
-    "drowsy": [(2, "z"), (4, "z z"), (6, "z z z")],
-    "stuffed": [(4, "z z")],
-    "hungry": [(6, "...")],
-    "spooked": [(1, "!")],
-    "sick": [(1, "?")],
+    "drowsy": {0: "z", 1: "z z"},
+    "stuffed": {1: "z z"},
+    "hungry": {5: "..."},
+    "spooked": {0: "!"},
+    "sick": {0: "?"},
 }
 
 
 def coloured(mood: str, shades: list[str], *, blink: bool = False,
              scale: float = 1.0) -> list[str]:
-    """Rows as Rich markup, with the gradient running down the body.
+    """Rows as Rich markup, with the gradient running down the head.
 
-    Two rows per shade rather than a per-row interpolation: the dog is
-    eighteen rows tall and a gradient that fine just looks like noise on a
-    terminal that quantises colour.
+    The rows are escaped, and that is not a precaution. The ear row ends in a
+    backslash, and in Rich markup a trailing backslash escapes whatever comes
+    next — so the closing tag was being swallowed and a literal `[/]` printed
+    itself at the start of the following line, shoving the whole drawing one
+    column sideways.
     """
+    from rich.markup import escape
+
     palette = MOOD_SHADES.get(mood, shades)
     rows = draw(mood, blink=blink, scale=scale)
-    accents = dict((row, text) for row, text in ACCENTS.get(mood, []))
+    accents = ACCENTS.get(mood, {})
 
     out = []
     for i, row in enumerate(rows):
         colour = palette[min(i * len(palette) // max(len(rows), 1), len(palette) - 1)]
         suffix = f"  [dim]{accents[i]}[/]" if i in accents else ""
-        out.append(f"[{colour}]{row}[/]{suffix}")
+        out.append(f"[{colour}]{escape(row)}[/]{suffix}")
     return out

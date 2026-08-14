@@ -14,8 +14,10 @@ from nenapu import connect, open_store
 from nenapu.models import Fact, Kind, Origin
 from nenapu.store import Store
 
-# Every braille cell, so a line of drawing can be told from a line of text.
-BRAILLE = "".join(chr(c) for c in range(0x2800, 0x2900))
+def drawing_rows(lines):
+    """Rows that are part of the dog rather than part of the text beside it."""
+    return [line for line in lines if ",__," in line or "'-._" in line
+            or "▾" in line]
 
 
 def render(width: int, height: int, store=None) -> list[str]:
@@ -64,10 +66,12 @@ def test_a_wide_terminal_puts_the_dog_beside_the_readout(store):
     """The side-by-side layout is what buys the room. If it silently stopped
     happening, the view would still fit and would have lost the dog."""
     lines = render(120, 40, store)
-    dog_rows = [line for line in lines if "⣿" in line or "⠿" in line]
-    assert dog_rows, "no drawing on a wide terminal"
-    assert any("facts" in line for line in dog_rows), \
-        "the readout should sit on the same rows as the dog, not below it"
+    drawn = drawing_rows(lines)
+
+    assert drawn, "no drawing on a wide terminal"
+    edge = max(line.rindex("'-.") + 3 for line in lines if "'-._" in line)
+    assert any(line[edge:].strip() for line in drawn), \
+        "text should sit on the same rows as the dog, not below it"
 
 
 def test_a_narrow_terminal_truncates_nothing_it_wrote_as_prose(store):
@@ -144,14 +148,14 @@ def test_a_tall_terminal_is_not_mostly_empty(width, height, store):
     assert used >= height * 0.7, f"only {used} of {height} rows used"
 
 
-def test_the_dog_grows_with_the_room(store):
-    """Every measurement in the drawing is a multiplication of one number,
-    which is the point of drawing it rather than typing it."""
+def test_the_dog_widens_with_the_room(store):
+    """It is seven rows tall by construction, so width is the only way it
+    grows. Rows it cannot use go to what the store has learned instead."""
     from nenapu.pet_art import draw
 
-    small, large = draw("content"), draw("content", scale=2.0)
+    small, large = draw("content"), draw("content", scale=1.6)
 
-    assert len(large) > len(small)
+    assert len(large) == len(small) == 7
     assert max(len(r) for r in large) > max(len(r) for r in small)
 
 
@@ -166,8 +170,8 @@ def test_the_dog_is_capped_by_width_not_only_height(store):
 
     for width in (96, 100, 110, 120):
         lines = render(width, 44, store)
-        drawn = max((len(line) - len(line.lstrip(BRAILLE)) for line in lines
-                     if line[:1] in BRAILLE), default=0)
+        drawn = max((line.rindex("'-.") + 3 for line in lines if "'-._" in line),
+                    default=0)
         assert width - drawn >= cli.MIN_TEXT_COLUMN, \
             f"at {width} columns the drawing left only {width - drawn} for the text"
 
@@ -179,8 +183,41 @@ def test_what_it_learned_lately_shows_when_there_is_room(store):
     store.write(Fact(text="the deploy command is make ship, not make deploy",
                      kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
 
-    roomy = "\n".join(render(120, 40, store))
-    cramped = "\n".join(render(110, 20, store))
+    for i in range(30):
+        store.write(Fact(text=f"a fact it picked up on its own, number {i}",
+                         kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
 
-    assert "Lately" in roomy and "make ship" in roomy
-    assert "Lately" not in cramped, "a short screen should spend its rows on the basics"
+    tall = [l for l in render(120, 44, store) if l.lstrip().startswith("◆")]
+    short = [l for l in render(120, 26, store) if l.lstrip().startswith("◆")]
+
+    assert tall, "nothing listed on a tall screen"
+    assert len(tall) > len(short), \
+        "the list should grow into the room rather than staying a fixed size"
+
+
+def test_the_drawing_never_leaks_markup(store):
+    """The ear row ends in a backslash, and in Rich markup a trailing
+    backslash escapes whatever follows — so the closing tag was swallowed and
+    a literal `[/]` printed itself at the start of the next line, shoving the
+    drawing a column sideways. Escaping the rows is not a precaution here."""
+    text = "\n".join(render(120, 40, store))
+
+    assert "[/]" not in text
+    assert "[#" not in text
+
+
+@pytest.mark.parametrize("width, height", [(120, 44), (120, 40), (110, 30),
+                                           (100, 36), (96, 30), (80, 30)])
+def test_the_view_fills_the_screen_it_was_given(width, height, store):
+    """"There is space below it" was the report. A ladder of fixed sizes lands
+    on whichever rung is closest and leaves the rest blank, so the frame is
+    measured once and the leftover rows are spent on what the store has
+    learned — which fills exactly, and with the most useful thing on screen."""
+    for i in range(40):
+        store.write(Fact(text=f"a fact it picked up on its own, number {i}",
+                         kind=Kind.PROJECT, origin=Origin.TOOL_OBSERVED))
+
+    used = len(render(width, height, store))
+
+    assert used <= height
+    assert used >= height - 2, f"{height - used} rows left empty"

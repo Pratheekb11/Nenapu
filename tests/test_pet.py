@@ -176,17 +176,19 @@ def test_freshness_counts_only_what_is_still_known(store):
 # ---------- the drawing ----------
 
 
-def test_the_drawing_has_no_blank_margin():
-    """`⠀` is U+2800, not a space, so `strip()` leaves it alone. An uncropped
-    canvas is a wide frame of invisible characters that eats terminal width and
-    pushes the status column off the screen."""
-    from nenapu.pet_art import BLANK, draw
+def test_every_row_of_the_drawing_is_the_same_width():
+    """The frame is built by placing characters at computed columns rather
+    than typed as a literal, because a hand-typed one drifts the moment a mood
+    needs a wider mouth than another — and a drawing whose right edge wobbles
+    by a column is exactly what looked cheap about the earlier attempts."""
+    from nenapu.pet_art import FACE_BY_MOOD, draw
 
-    rows = draw("content")
-
-    assert not all(row[0] == BLANK for row in rows)
-    assert not all(row[-1] == BLANK for row in rows)
-    assert set(rows[0]) != {BLANK} and set(rows[-1]) != {BLANK}
+    for mood in FACE_BY_MOOD:
+        rows = draw(mood)
+        walls = [row.index("|") for row in rows if row.startswith("  |")]
+        assert len(set(walls)) == 1, f"{mood}: the head's left wall moves"
+        closing = [len(row) for row in rows if row.rstrip().endswith("|")]
+        assert len(set(closing)) == 1, f"{mood}: the head's right wall moves"
 
 
 def test_the_drawing_fits_beside_its_status():

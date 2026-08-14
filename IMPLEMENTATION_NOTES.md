@@ -298,51 +298,39 @@ surface (operator jobs live in the CLI, never registered as tools), lean recall
 results that omit predictable fields, and a test asserting the surface stays
 under budget.
 
-## The pet is drawn, not typed
+## The pet: four compositions, two techniques
 
-Braille cells carry 2x4 dots, so a 32-column block of them is an 84x58 bitmap —
-enough resolution for something that reads as an animal rather than as
-punctuation. The dog is therefore assembled from ellipses at runtime and a mood
-is a handful of pixel edits: eyes shut, brows down, mouth open, tongue out.
-Nine hand-typed drawings would have started drifting apart the first time an
-eye needed to move one dot left.
+Three braille-bitmap versions came first — a filled silhouette, then chibi
+proportions, then outlines with the eyes as the only filled shapes — and the
+verdicts were "looks pirated" and "still ugly". Both were right, and the reason
+was the medium rather than the geometry.
 
-That the animal changed species late is the argument for the approach. Going
-from a bear to a dog was ears, a snout, a collar and a tail — a few dozen lines
-of geometry — and every mood, blink and colour followed along. Hand-typed
-braille would have been nine drawings to redo.
+**Braille has more resolution than characters and looks worse.** 2x4 dots per
+cell sounds like plenty. But every curve lands on a different dot pattern, so a
+smooth outline arrives as a row of unrelated glyphs — `⣠⣴⣾⠿` — and reads as
+something photocopied badly. Ordinary characters carry far less information per
+cell and look far better, because each one was drawn by a type designer: a `/`
+is a clean diagonal at every size, and the braille approximation of the same
+diagonal is a staircase.
 
-Three things the first drafts got wrong, each visible the moment it was
-printed:
+So the dog is now set out of well-drawn pieces, and the only thing generated is
+the arithmetic that keeps it aligned. Every row places its characters at
+computed columns rather than being typed as a literal — a hand-typed frame
+drifts the moment one mood needs a wider mouth than another, and a drawing
+whose right edge wobbles by a column is exactly what looked cheap about the
+earlier attempts. There is a test that the head's walls land on the same column
+in every mood.
 
-**A filled silhouette cannot be cute.** Three compositions were drawn before
-this one: a filled body with features carved out of it, then the same thing
-with chibi proportions, then a head on a small body. The first read as a stamp,
-and all three had the same flaw — parts competing for a small canvas, every
-feature shrinking until it turned to mush against the fill. The verdict on the
-second was "looks pirated", which is exactly right for a knock-off plush.
+What survived all four versions: the moods, their priority order, the colour
+override when something is wrong, the blink, and the layout around it. Only the
+drawing was ever thrown away, which is the argument for keeping the readout and
+the picture separate.
 
-What worked was inverting it: outlines and arcs, with the eyes as the only
-large filled shapes. An empty face means the eyes are the only thing to look
-at, and no body means nothing crowds the mouth. Cute is uncluttered before it
-is anything else.
-
-**A catchlight goes beside the eye, not inside it.** Braille has no grey to
-soften a hole with, so a 3px bite out of a 12px eye is a chunk missing — the
-eye reads as cracked rather than as shiny.
-
-**Ears carry the species.** Filled and hanging, the same head is a puppy;
-outlined and perched, it is a balloon with two rings on it. They are the only
-heavy shapes besides the eyes for exactly that reason.
-
-**`⠀` is U+2800, not a space.** The canvas is sized for the shapes rather than
-the result, so the dog arrived inside a wide frame of blank braille that
-`strip()` will not touch. It silently ate terminal width and pushed the status
-column off the screen. The drawing is cropped to its ink.
-
-An unwell dog is not drawn in the user's theme colour. The point of the
-creature is that a bad store cannot look like a good one, and a calm teal dog
-with its eyes crossed still reads as fine at a glance.
+**Escaping the rows is not a precaution.** The ear row ends in a backslash, and
+in Rich markup a trailing backslash escapes what follows — so the closing tag
+was swallowed and a literal `[/]` printed itself at the start of the next line,
+shoving the whole drawing a column sideways. It was invisible until a test
+looked at the rendered text rather than at the drawing.
 
 ## The landing view is measured, not guessed
 
@@ -372,9 +360,14 @@ tested.
 The drawing is capped by width as well as by height. Sized against rows alone
 it grew until the column beside it could not hold a sentence, and Rich answered
 by cutting every line of the readout off with an ellipsis: a bigger drawing
-bought with the text that says what the thing actually knows. Where the dog is
-already at its width cap the spare rows go into more facts instead, which is
-the more useful thing to be looking at anyway.
+bought with the text that says what the thing actually knows.
+
+A ladder of fixed sizes was still not enough — it lands on whichever rung is
+closest and leaves the rest blank, which is what "there is space below it"
+meant. The drawing is seven rows tall whatever its width, so it cannot fill a
+tall screen by itself. The frame is measured once and every leftover row goes
+to what the store has learned lately. That fills the screen exactly, and fills
+it with the most useful thing on it.
 
 **Which candidate to print is measured, not calculated.** `_first_that_fits`
 renders each version and counts the lines. How tall any of them is depends on

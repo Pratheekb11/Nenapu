@@ -327,40 +327,42 @@ def _landing(store):
             parts += [_commands_table(), Text("")]
         return Group(*parts, hint)
 
-    # Largest first. Below 96 columns the two columns are each too thin and
-    # Rich cuts command names mid-word, so those sizes stack instead.
-    candidates = []
+    # The drawing is seven rows tall whatever its width, so a ladder of sizes
+    # cannot fill a tall screen on its own — it lands on whichever rung is
+    # closest and leaves the rest blank, which is what "there is space below
+    # it" meant. So the frame is measured once and the leftover rows are spent
+    # on what the store has learned. That fills exactly, and fills it with the
+    # most useful thing on the screen.
     if cols >= SIDE_BY_SIDE_WIDTH:
-        # Descending in size, and finely enough graded that a terminal of any
-        # height lands on something close to full rather than on the next size
-        # down with a third of the screen left over.
-        #
-        # The dog is capped by width as well as by height. Sized only against
-        # rows it grew until the column beside it was too narrow to hold a
-        # sentence, and Rich answered by cutting every line of the readout off
-        # with an ellipsis — a bigger drawing bought with the text that says
-        # what the thing actually knows.
-        # Ordered by how much of the screen each one takes. Where the drawing
-        # is already at its width cap, the remaining rows go into more of what
-        # it has learned rather than into a bigger dog — which is the more
-        # useful thing to be looking at anyway.
-        for scale, recent, header in (
-            (2.8, 14, True), (2.4, 12, True), (2.0, 10, True),
-            (1.7, 20, True), (1.7, 14, True), (1.7, 8, True), (1.7, 6, True),
-            (1.4, 16, True), (1.4, 10, True), (1.4, 5, True),
-            (1.2, 12, True), (1.2, 6, True), (1.2, 4, True),
-            (1.1, 3, True), (1.0, 3, True), (1.0, 2, False),
-            (1.0, 0, True), (1.0, 0, False),
-        ):
-            if scale > 1.0 and art_width(scale) > cols - MIN_TEXT_COLUMN:
-                continue
-            candidates.append(side_by_side(scale, False, recent, header))
-    candidates += [stacked(True, True, 5), stacked(True, True, 3), stacked(True, True),
-                   stacked(False, True), stacked(False, False)]
-    # Three rows held back: the blank line above the view, the one below it,
-    # and the shell prompt that comes next. Filling the terminal exactly still
-    # scrolls the top line away once the prompt is drawn.
-    return _first_that_fits(candidates, rows - 2)
+        scale = 1.0
+        for candidate in (2.0, 1.7, 1.4, 1.2):
+            if art_width(candidate) <= cols - MIN_TEXT_COLUMN:
+                scale = candidate
+                break
+        for header in (True, False):
+            frame = side_by_side(scale, False, 0, header)
+            spare = rows - 2 - _height(console, frame)
+            # Two of the spare rows go to the heading and the blank line under
+            # the list, so anything under three buys nothing.
+            if spare >= 3:
+                filled = side_by_side(scale, False, spare - 2, header)
+                if _height(console, filled) <= rows - 2:
+                    return filled
+            if _height(console, frame) <= rows - 2:
+                return frame
+
+    # Stacked, for terminals too narrow to put anything beside anything else.
+    # Same trick: measure the frame, then fill what is left with facts.
+    for art in (True, False):
+        frame = stacked(art, True)
+        spare = rows - 2 - _height(console, frame)
+        if spare >= 3:
+            filled = stacked(art, True, spare - 2)
+            if _height(console, filled) <= rows - 2:
+                return filled
+        if _height(console, frame) <= rows - 2:
+            return frame
+    return _first_that_fits([stacked(False, True), stacked(False, False)], rows - 2)
 
 
 def _greet(store) -> None:
