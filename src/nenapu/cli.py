@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -816,6 +817,7 @@ GUIDE = [
         ("nenapu why <id>", "what it rests on, and rests on it"),
     ]),
     ("Checking on it", [
+        ("nenapu pet", "how the store is doing, with a face on it"),
         ("nenapu observe <file> --dry-run", "what it would learn"),
         ("nenapu doctor --calibrate", "prove the model can audit"),
         ("nenapu approve", "no check runs until you say so"),
@@ -923,6 +925,61 @@ def theme(
     if os.environ.get("NENAPU_THEME"):
         console.print("  [yellow]NENAPU_THEME is set and overrides this[/]")
     console.print()
+
+
+@app.command(rich_help_panel=DIAGNOSE)
+def pet(
+    watch: bool = typer.Option(False, "--watch", help="Stay open and keep looking"),
+    line_only: bool = typer.Option(False, "--line", help="One line, for a status bar"),
+    as_json: bool = typer.Option(False, "--json", help="The numbers behind the face"),
+    db: str = DB_OPT,
+) -> None:
+    """How the store is doing, with a face on it.
+
+    Everything here is already in `nenapu stats`. Nobody reads `nenapu stats`:
+    eleven numbers have no opinion about whether anything is wrong, so the
+    memory debt sits there for a week. The pet cannot look happy while a check
+    is failing, which is the only reason it is worth having.
+    """
+    from .pet import assess, line, render
+
+    store, _ = _stores(db)
+    creature = assess(store)
+
+    if as_json:
+        print(json.dumps({"mood": creature.mood, "face": creature.face,
+                          "blurb": creature.blurb, "stats": creature.stats}, default=str))
+        return
+    if line_only:
+        print(line(creature))
+        return
+    if not watch:
+        console.print()
+        console.print(render(creature))
+        console.print()
+        return
+
+    # Watch mode re-reads the store rather than the snapshot, so a fact written
+    # in another terminal shows up here — which is the only reason to leave it
+    # open at all.
+    from rich.live import Live
+
+    blink = False
+    try:
+        with Live(console=console, refresh_per_second=4, transient=False) as live:
+            while True:
+                creature = assess(store)
+                live.update(_render_text(render(creature, blink=blink)))
+                blink = not blink
+                time.sleep(1.2 if blink else 4.0)
+    except KeyboardInterrupt:
+        console.print("[dim]bye[/]")
+
+
+def _render_text(markup: str):
+    from rich.text import Text
+
+    return Text.from_markup("\n" + markup + "\n")
 
 
 @app.command(rich_help_panel=DIAGNOSE)

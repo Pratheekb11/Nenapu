@@ -178,6 +178,41 @@ nenapu export ./CLAUDE.md    # materialize into a managed block
 
 Run `nenapu` alone for the full command list, grouped into five panels.
 
+## The pet
+
+`nenapu stats` prints eleven numbers and nobody reads them. Eleven numbers have
+no opinion about whether anything is wrong, so the memory debt sits there for a
+week.
+
+```
+$ nenapu pet
+
+    ᐡ×ᴥ×ᐡ ?   1 thing it believed stopped being true
+
+      12 facts, 3 learned today
+      last fed just now, last observed a session 14m ago
+      a check that used to pass is failing — nenapu loops
+```
+
+Every mood is a real signal with a threshold you can argue with. It is hungry
+because nothing has been learned in three days — which usually means the Stop
+hook is not firing. Sick because a check that used to pass is failing. Spooked
+because a cascade knocked facts over. Drowsy because most of what it knows has
+decayed past the floor. Content only when none of that is true.
+
+It cannot look happy while the store is unwell, which is the only reason it is
+worth having: a cosmetic pet teaches you to ignore it.
+
+```bash
+nenapu pet --watch    # stay open; picks up facts written in another terminal
+nenapu pet --line     # ᐡ•ᴥ•ᐡ · 80 facts · fed 2m ago     (for a status bar)
+nenapu pet --json     # the numbers behind the face
+```
+
+The face is not in the banner on every command, deliberately: assessing health
+reads every active fact, and paying for that on `nenapu list` would make the
+whole CLI feel slow to look at a bear.
+
 ## Editors without a hook API
 
 Cursor, VS Code and Codex have no hook API, so there the memory has to be
