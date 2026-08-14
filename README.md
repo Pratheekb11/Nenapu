@@ -247,6 +247,16 @@ $ nenapu approve
 
 Approval binds to the exact command string. Nothing over MCP or HTTP can
 approve anything. Non-interactive shells refuse rather than defaulting to yes.
+The observer cannot introduce one at all: its extraction schema has no
+`verify_cmd` field, so nothing read out of a transcript can become a command.
+
+**What the gate does not cover.** A fact is text that gets injected into future
+sessions, so a session that read a poisoned file can still leave a *misleading*
+memory behind — not code, but something your agent will believe next week.
+Every fact carries its origin, `nenapu list` shows what was observed rather
+than stated, and `nenapu forget` retires one. Read what it learned now and then;
+`nenapu observe <file> --dry-run` shows what a transcript would produce without
+storing anything.
 
 ## Model backends
 

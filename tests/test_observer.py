@@ -7,6 +7,8 @@ ten-turn transcript and harvested 2,400 characters of a real one.
 """
 
 import json
+import os
+import stat
 import time
 
 import pytest
@@ -458,3 +460,49 @@ def test_the_transcript_reader_redacts_before_returning(tmp_path):
     assert "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345" not in text
     assert "[redacted:github-token]" in text
     assert "make ship" in text
+
+
+# ---------- the log beside the store ----------
+
+
+def test_the_observe_log_is_owner_only(tmp_path):
+    """It holds the text of every fact an extraction wrote — the same private
+    content the store is kept at 0600 for. `open(path, "a")` created it with
+    the umask, so it sat world-readable and the directory was covering for it.
+    """
+    from nenapu.cli import _open_observe_log
+
+    log = tmp_path / "observe.log"
+    _open_observe_log(log).close()
+
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_a_log_from_an_older_version_is_tightened(tmp_path):
+    from nenapu.cli import _open_observe_log
+
+    log = tmp_path / "observe.log"
+    log.write_text("old and loose\n")
+    os.chmod(log, 0o644)
+
+    _open_observe_log(log).close()
+
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_the_log_does_not_grow_without_end(tmp_path):
+    """A hook that appends after every session and never rotates only goes one
+    way. One generation back is enough to debug the failure that just
+    happened, which is all this log is for."""
+    from nenapu.cli import MAX_LOG_BYTES, _open_observe_log
+
+    log = tmp_path / "observe.log"
+    log.write_text("x" * (MAX_LOG_BYTES + 1))
+
+    handle = _open_observe_log(log)
+    handle.write("the newest failure\n")
+    handle.close()
+
+    assert log.stat().st_size < MAX_LOG_BYTES
+    assert log.with_suffix(".log.1").exists()
+    assert "the newest failure" in log.read_text()

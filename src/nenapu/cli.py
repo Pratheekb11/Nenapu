@@ -577,6 +577,33 @@ def recall_hook(db: str = DB_OPT) -> None:
         print(text)
 
 
+# The log holds the text of every fact the extraction wrote, which is the same
+# private content the store itself is kept at 0600 for. It also grows once per
+# session forever.
+MAX_LOG_BYTES = 512_000
+
+
+def _open_observe_log(path: Path):
+    """Append to the observe log, owner-only and bounded.
+
+    Two things were wrong with `open(path, "a")`. It creates with the process
+    umask — 0664 here — so the extracted facts sat world-readable beside a
+    store that had just been locked to 0600; the directory was covering for it.
+    And nothing ever bounded the file: a hook that appends after every session
+    and never rotates only goes one way.
+    """
+    if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
+        # One generation back is enough to debug the failure that just
+        # happened, which is all this log is for.
+        os.replace(path, path.with_suffix(".log.1"))
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.chmod(path, 0o600)  # a log from an older version is tightened too
+    except OSError:
+        pass
+    return os.fdopen(fd, "a")
+
+
 def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
     """Spawn a fully detached `nenapu observe` and do not wait for it.
 
@@ -591,7 +618,7 @@ def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
     log_dir = Path(db).expanduser().parent if db else Path("~/.nenapu").expanduser()
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        log = open(log_dir / "observe.log", "a")
+        log = _open_observe_log(log_dir / "observe.log")
     except OSError:
         log = subprocess.DEVNULL
 

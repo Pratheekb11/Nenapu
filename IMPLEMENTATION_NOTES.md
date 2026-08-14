@@ -300,7 +300,16 @@ under budget.
 
 ## Things still open
 
+- The repo is private, so the install URL in the README 404s for anyone else.
+- No CI. 251 tests exist and nothing runs them on push.
+- Dependencies float and there is no lockfile; a breaking release upstream
+  breaks new installs, and nothing here would notice.
+- Not published to PyPI; install is git-only.
+- Poisoned *content* is not covered by the approval gate. A session that read a
+  hostile file can leave a misleading fact behind — not code, but something the
+  agent will believe later. Origin is recorded, `--dry-run` shows what a
+  transcript would produce, and that is the whole of the defence.
 - No full-store backup/restore; export is a filtered Markdown block.
-- Dependencies float; no lockfile.
 - The `anthropic` backend proper is unexercised — `exec` covers the same path.
 - Ollama keeps generating after a client timeout; handled, not elegant.
+- Python 3.10 and 3.11 are both run and green; nothing older or newer is.

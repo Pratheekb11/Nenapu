@@ -70,10 +70,18 @@ def read_config() -> dict:
 
 def write_config(**values) -> None:
     import json
+    import os
 
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({**read_config(), **values}, indent=2) + "\n")
+    # Nothing secret lives here today, but it shares a directory with things
+    # that are, and a file left at the umask is how that stops being true
+    # quietly.
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def resolve_theme() -> str:
