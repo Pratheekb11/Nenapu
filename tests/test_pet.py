@@ -210,7 +210,7 @@ def test_each_mood_is_visibly_a_different_face(mood):
 
 
 def test_blinking_only_moves_eyes_that_were_open():
-    """A bear whose eyes are already shut should not flicker; that reads as a
+    """A dog whose eyes are already shut should not flicker; that reads as a
     glitch rather than as a creature."""
     from nenapu.pet_art import draw
 
@@ -220,15 +220,15 @@ def test_blinking_only_moves_eyes_that_were_open():
 
 
 def test_the_art_carries_no_markup_of_its_own():
-    """Rich would swallow a stray bracket, and the bear would lose a row."""
+    """Rich would swallow a stray bracket, and the dog would lose a row."""
     from nenapu.pet_art import draw
 
     assert not any("[" in row or "]" in row for row in draw("spooked"))
 
 
-def test_an_unwell_bear_does_not_get_the_theme_colour():
+def test_an_unwell_dog_does_not_get_the_theme_colour():
     """The whole point is that a bad store cannot look like a good one, and a
-    calm teal bear with its eyes crossed still reads as fine at a glance."""
+    calm teal dog with its eyes crossed still reads as fine at a glance."""
     from nenapu.banner import THEMES
     from nenapu.pet_art import MOOD_SHADES, coloured
 

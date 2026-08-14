@@ -43,32 +43,33 @@ class Pet:
         return self.mood in ("sick", "spooked", "hungry", "drowsy", "stuffed")
 
 
-# The bear keeps the mark the project already uses. Only the eyes move, which
-# is enough: a face you recognise at a glance is a face you read at a glance.
+# Ears down, matching the drawing. Only the eyes move between moods: a face you
+# recognise at a glance is a face you read at a glance. (The project's own mark
+# stays ᐡ•ᴥ•ᐡ — that is the wordmark, not the pet.)
 FACES = {
-    "sick": "ᐡ×ᴥ×ᐡ",
-    "spooked": "ᐡ⊙ᴥ⊙ᐡ",
-    "hungry": "ᐡ•ᗝ•ᐡ",
-    "drowsy": "ᐡ˘ᴥ˘ᐡ",
-    "restless": "ᐡ˙ᴥ˙ᐡ",
-    "stuffed": "ᐡ-ᴥ-ᐡ",
-    "content": "ᐡ•ᴥ•ᐡ",
-    "delighted": "ᐡ^ᴥ^ᐡ",
-    "new": "ᐡ·ᴥ·ᐡ",
+    "sick": "▽×ᴥ×▽",
+    "spooked": "▽⊙ᴥ⊙▽",
+    "hungry": "▽•ᗝ•▽",
+    "drowsy": "▽˘ᴥ˘▽",
+    "restless": "▽˙ᴥ˙▽",
+    "stuffed": "▽-ᴥ-▽",
+    "content": "▽•ᴥ•▽",
+    "delighted": "▽^ᴥ^▽",
+    "new": "▽·ᴥ·▽",
 }
 
-# Second frame for the blink. Anything that is already squinting stays put —
-# a sleepy bear blinking looks like a glitch rather than a bear.
+# Second frame for the blink. Anything already squinting stays put — a sleeping
+# dog that flickers reads as a glitch rather than as a dog.
 BLINKS = {
-    "sick": "ᐡ×ᴥ×ᐡ",
-    "spooked": "ᐡ－ᴥ－ᐡ",
-    "hungry": "ᐡ－ᗝ－ᐡ",
-    "drowsy": "ᐡ˘ᴥ˘ᐡ",
-    "restless": "ᐡ－ᴥ－ᐡ",
-    "stuffed": "ᐡ-ᴥ-ᐡ",
-    "content": "ᐡ－ᴥ－ᐡ",
-    "delighted": "ᐡ－ᴥ－ᐡ",
-    "new": "ᐡ－ᴥ－ᐡ",
+    "sick": "▽×ᴥ×▽",
+    "spooked": "▽－ᴥ－▽",
+    "hungry": "▽－ᗝ－▽",
+    "drowsy": "▽˘ᴥ˘▽",
+    "restless": "▽－ᴥ－▽",
+    "stuffed": "▽-ᴥ-▽",
+    "content": "▽－ᴥ－▽",
+    "delighted": "▽－ᴥ－▽",
+    "new": "▽－ᴥ－▽",
 }
 
 
@@ -227,7 +228,7 @@ def render(pet: Pet, *, blink: bool = False) -> str:
     return "\n".join(lines)
 
 
-# Below this width the drawn bear and its status cannot sit side by side, and
+# Below this width the drawn dog and its status cannot sit side by side, and
 # stacking a 44-column animal on top of the numbers pushes them off a small
 # screen. The compact view is not a fallback, it is the right answer there.
 FULL_MIN_WIDTH = 78
@@ -248,7 +249,7 @@ def render_full(pet: Pet, shades: list[str], *, blink: bool = False):
     colour = MOOD_COLOUR.get(pet.mood, "white")
 
     # No manual padding: the grid column is vertically centred, and doing
-    # both leaves the text sitting below the bear it belongs to.
+    # both leaves the text sitting below the dog it belongs to.
     status = Text()
     status.append_text(Text.from_markup(f"[bold {colour}]{pet.mood}[/]  "))
     status.append_text(Text.from_markup(f"[italic]{pet.blurb}[/]\n\n"))

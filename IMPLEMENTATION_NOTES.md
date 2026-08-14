@@ -300,12 +300,17 @@ under budget.
 
 ## The pet is drawn, not typed
 
-Braille cells carry 2x4 dots, so a 23-column block of them is an 88x72 bitmap —
+Braille cells carry 2x4 dots, so a 24-column block of them is an 88x76 bitmap —
 enough resolution for something that reads as an animal rather than as
-punctuation. The bear is therefore assembled from ellipses at runtime and a
-mood is a handful of pixel edits: eyes shut, brows down, mouth open. Nine
-hand-typed drawings would have started drifting apart the first time an eye
-needed to move one dot left.
+punctuation. The dog is therefore assembled from ellipses at runtime and a mood
+is a handful of pixel edits: eyes shut, brows down, mouth open, tongue out.
+Nine hand-typed drawings would have started drifting apart the first time an
+eye needed to move one dot left.
+
+That the animal changed species late is the argument for the approach. Going
+from a bear to a dog was ears, a snout, a collar and a tail — a few dozen lines
+of geometry — and every mood, blink and colour followed along. Hand-typed
+braille would have been nine drawings to redo.
 
 Three things the first drafts got wrong, each visible the moment it was
 printed:
@@ -316,15 +321,18 @@ front now carves a slightly larger hole before filling its own shape — the gap
 is what makes the parts legible, exactly as in a paper cut-out.
 
 **Two holes in a face are not eyes.** A carved white with a filled pupil inside
-it reads as looking at something; a plain hole reads as a hole.
+it reads as looking at something; a plain hole reads as a hole. They also have
+to stay small: large carved whites turned the head into an outline drawing
+while the chest below was still filled, and the two halves stopped looking like
+one animal.
 
 **`⠀` is U+2800, not a space.** The canvas is sized for the shapes rather than
-the result, so the bear arrived inside a wide frame of blank braille that
+the result, so the dog arrived inside a wide frame of blank braille that
 `strip()` will not touch. It silently ate terminal width and pushed the status
 column off the screen. The drawing is cropped to its ink.
 
-An unwell bear is not drawn in the user's theme colour. The point of the
-creature is that a bad store cannot look like a good one, and a calm teal bear
+An unwell dog is not drawn in the user's theme colour. The point of the
+creature is that a bad store cannot look like a good one, and a calm teal dog
 with its eyes crossed still reads as fine at a glance.
 
 ## Things still open

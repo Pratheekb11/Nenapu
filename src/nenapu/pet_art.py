@@ -5,7 +5,7 @@ bitmap — enough resolution for something that reads as an animal rather than a
 punctuation. The alternative was hand-typing fifteen lines of ⣿⣦⠿ per mood,
 which is unmaintainable the moment an eye needs to move one dot to the left.
 
-So the bear is drawn instead: a silhouette assembled from ellipses, with the
+So the dog is drawn instead: a silhouette assembled from ellipses, with the
 face carved back out of it. A mood is then a handful of pixel edits — eyes
 shut, mouth open, brows down — rather than a separate picture, which is what
 keeps nine moods from becoming nine drawings that slowly stop matching.
@@ -77,7 +77,7 @@ BLANK = chr(0x2800)  # not a space: `strip()` will not touch it
 def _crop(rows: list[str]) -> list[str]:
     """Trim the empty margin around the drawing.
 
-    The canvas is sized for the shapes rather than for the result, so a bear
+    The canvas is sized for the shapes rather than for the result, so a dog
     that does not fill it arrives inside a wide frame of blank braille. That is
     not whitespace — `⠀` is U+2800 and `strip()` leaves it alone — so it
     silently eats terminal width and pushes the status column off the screen.
@@ -91,91 +91,119 @@ def _crop(rows: list[str]) -> list[str]:
     return [row[left:len(row) - right] for row in rows]
 
 
-W, H = 88, 72
-HEAD_CX, HEAD_CY = 44, 28
-HEAD_RX, HEAD_RY = 19, 16
+# 88x72 dots is 44 columns by 18 text rows. Bigger than a silhouette needs and
+# no bigger than a face needs: at half this the eyes were two dots wide and
+# every mood looked the same.
+# 88x76 dots is 44 columns by 19 text rows. Bigger than a silhouette needs and
+# no bigger than a face needs: at half this the eyes were two dots wide and
+# every mood looked the same.
+W, H = 88, 76
+HEAD_CX, HEAD_CY = 44, 24
+HEAD_RX, HEAD_RY = 16, 14
 
 
 def _body(c: Canvas) -> None:
-    """Ears, head, body, feet — everything that never changes with mood.
+    """Ears, head, chest, legs, tail — everything that never changes with mood.
 
     Order is the whole trick. A silhouette drawn as one union of ellipses is a
-    blob: the head merges into the body, the ears melt into the head, and the
+    blob: the head merges into the chest, the ears melt into the head, and the
     result reads as a lump with two holes in it. So whatever sits in front
     carves a slightly larger hole before filling its own shape. The gap is what
-    makes the parts legible, exactly as it is in a paper cut-out.
+    makes the parts legible, exactly as in a paper cut-out.
     """
-    c.ellipse(HEAD_CX - 17, 56, 5, 7)                # arms, behind the body
-    c.ellipse(HEAD_CX + 17, 56, 5, 7)
-    c.ellipse(HEAD_CX - 10, 68, 7, 4)                # feet
-    c.ellipse(HEAD_CX + 10, 68, 7, 4)
+    # Tail, curling up and out behind the hip. Drawn as circles along a curve
+    # rather than as one shape, because an ellipse cannot bend.
+    for i in range(8):
+        t = i / 7
+        c.ellipse(HEAD_CX + 11 + 12 * t, 58 - 15 * t * t, 3.4 - t, 3.4 - t)
 
-    c.ellipse(HEAD_CX, 56, 15, 12, 0)                # body clears its gap
-    c.ellipse(HEAD_CX, 56, 13.5, 10.5)
-    c.ellipse(HEAD_CX, 59, 5.5, 4.5, 0)              # a paler belly
+    c.ellipse(HEAD_CX - 6, 64, 3.6, 6)               # front legs
+    c.ellipse(HEAD_CX + 6, 64, 3.6, 6)
+    c.ellipse(HEAD_CX - 6, 70, 4.6, 2.6)             # paws
+    c.ellipse(HEAD_CX + 6, 70, 4.6, 2.6)
 
-    c.ellipse(HEAD_CX - 14, HEAD_CY - 18, 7.5, 7)    # ears, behind the head
-    c.ellipse(HEAD_CX + 14, HEAD_CY - 18, 7.5, 7)
-    c.ellipse(HEAD_CX - 14, HEAD_CY - 20, 3.2, 3, 0)   # inner ear
-    c.ellipse(HEAD_CX + 14, HEAD_CY - 20, 3.2, 3, 0)
+    c.ellipse(HEAD_CX, 54, 12, 12, 0)                # chest clears its gap
+    c.ellipse(HEAD_CX, 54, 10.5, 10.5)
+    c.ellipse(HEAD_CX, 56, 4.5, 4.5, 0)              # a paler chest patch
+
+    # Collar. Nothing else in the drawing says "someone's dog" this cheaply.
+    c.bar(HEAD_CX - 9, 40, HEAD_CX + 9, 42)
+    c.ellipse(HEAD_CX, 44, 2.2, 2.2)
+
+    # Ears hang. This is the single line between this animal and the bear it
+    # used to be: long, low, and reaching the jaw rather than perched on top.
+    c.ellipse(HEAD_CX - 17, HEAD_CY + 4, 5, 11)
+    c.ellipse(HEAD_CX + 17, HEAD_CY + 4, 5, 11)
 
     c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX + 1.2, HEAD_RY + 1.2, 0)
     c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX, HEAD_RY)
 
 
 def _muzzle(c: Canvas, *, open_mouth: bool = False, smile: bool = True) -> None:
-    """Snout patch carved out of the head, with the nose filled back in."""
-    c.ellipse(HEAD_CX, HEAD_CY + 7, 8.5, 5.5, 0)
-    c.ellipse(HEAD_CX, HEAD_CY + 4, 3.2, 2.2)
+    """A snout, longer than it is wide, with the nose filled back in at the tip.
+
+    The tongue is not decoration: it is the difference between a dog that is
+    fine and a dog that is pleased, and those are two different store states.
+    """
+    c.ellipse(HEAD_CX, HEAD_CY + 7, 6.5, 5, 0)
+    c.ellipse(HEAD_CX, HEAD_CY + 4, 2.6, 2.0)        # nose
+    c.set(HEAD_CX, HEAD_CY + 6)                      # philtrum, down to the mouth
+    c.set(HEAD_CX, HEAD_CY + 7)
+
     if open_mouth:
-        c.ellipse(HEAD_CX, HEAD_CY + 9, 3.0, 2.6)
+        c.ellipse(HEAD_CX, HEAD_CY + 9, 2.8, 2.4)
         return
-    for dx in range(-4, 5):
-        curve = abs(dx) // 2
-        y = HEAD_CY + 9 + (curve if smile else -curve)
+    for dx in (-4, -3, -2, 2, 3, 4):
+        y = HEAD_CY + 8 + ((abs(dx) - 2) // 2 if smile else -((abs(dx) - 2) // 2))
         c.set(HEAD_CX + dx, y)
         c.set(HEAD_CX + dx, y + 1)
+    if smile:                                        # tongue
+        c.ellipse(HEAD_CX, HEAD_CY + 11, 2.2, 2.6)
 
 
 def _eyes(c: Canvas, style: str) -> None:
     """Whites carved out of the head, pupils filled back in.
 
-    Two levels rather than one: a plain hole reads as a hole, and a bear with
+    Two levels rather than one: a plain hole reads as a hole, and a dog with
     two holes in its face is not looking at anything.
     """
-    left, right, y = HEAD_CX - 8, HEAD_CX + 8, HEAD_CY - 4
+    left, right, y = HEAD_CX - 7, HEAD_CX + 7, HEAD_CY - 3
     if style == "closed":
         for cx in (left, right):
-            for dx in range(-4, 5):
-                yy = y + (1 if abs(dx) > 2 else 0)
+            for dx in range(-3, 4):
+                yy = y + (1 if abs(dx) > 1 else 0)
                 c.set(cx + dx, yy, 0)
                 c.set(cx + dx, yy + 1, 0)
         return
     if style == "cross":
         for cx in (left, right):
-            for d in range(-4, 5):
+            for d in range(-3, 4):
                 for t in (0, 1):
                     c.set(cx + d + t, y + d, 0)
                     c.set(cx + d + t, y - d, 0)
         return
-    white = {"wide": 4.2, "normal": 3.4, "narrow": 3.4}[style]
+    # Small enough that the head stays a solid shape. Big carved whites turned
+    # it into an outline drawing while the chest below was still filled in, and
+    # the two halves stopped looking like one animal.
+    white = {"wide": 3.4, "normal": 2.8, "narrow": 2.8}[style]
     for cx in (left, right):
         c.ellipse(cx, y, white, white * (0.4 if style == "narrow" else 1.0), 0)
-        c.ellipse(cx, y, 1.7, 1.7 if style != "narrow" else 1.0)
+        c.ellipse(cx, y, 1.4, 1.4 if style != "narrow" else 0.9)
 
 
 def _brows(c: Canvas, angle: str) -> None:
-    """Worry is mostly eyebrows. Without them every mood is mildly surprised."""
+    """Worry is mostly eyebrows. Without them every mood is mildly surprised,
+    and a dog's brow spots are doing this job anyway."""
     if angle == "none":
         return
-    for side, cx in ((-1, HEAD_CX - 8), (1, HEAD_CX + 8)):
+    for side, cx in ((-1, HEAD_CX - 6.5), (1, HEAD_CX + 6.5)):
         for dx in range(-4, 5):
             drop = int(dx * side * 0.7) if angle == "down" else int(-dx * side * 0.7)
-            c.set(cx + dx, HEAD_CY - 11 + drop, 0)
-            c.set(cx + dx, HEAD_CY - 10 + drop, 0)
+            c.set(round(cx) + dx, HEAD_CY - 10 + drop, 0)
+            c.set(round(cx) + dx, HEAD_CY - 9 + drop, 0)
 
 
-# Each mood is the same bear with a different face. Nothing here draws a new
+# Each mood is the same dog with a different face. Nothing here draws a new
 # animal, which is what stops the nine of them drifting apart.
 FACE_BY_MOOD = {
     "sick":      dict(eyes="cross",  brows="down", mouth="open",  smile=False),
@@ -191,7 +219,7 @@ FACE_BY_MOOD = {
 
 
 def draw(mood: str, *, blink: bool = False) -> list[str]:
-    """The bear, as braille rows. `blink` shuts whatever eyes are open."""
+    """The dog, as braille rows. `blink` shuts whatever eyes are open."""
     face = FACE_BY_MOOD.get(mood, FACE_BY_MOOD["content"])
     canvas = Canvas(W, H)
     _body(canvas)
@@ -204,7 +232,7 @@ def draw(mood: str, *, blink: bool = False) -> list[str]:
 
 # Moods with something wrong get their own colour rather than the theme's: the
 # whole point of the creature is that a bad store cannot look like a good one,
-# and a teal bear with its eyes crossed still reads as fine at a glance.
+# and a teal dog with its eyes crossed still reads as fine at a glance.
 MOOD_SHADES = {
     "sick": ["#FCA5A5", "#F87171", "#EF4444", "#DC2626", "#B91C1C", "#991B1B"],
     "spooked": ["#FDE68A", "#FCD34D", "#FBBF24", "#F59E0B", "#D97706", "#B45309"],
@@ -223,8 +251,8 @@ ACCENTS = {
 def coloured(mood: str, shades: list[str], *, blink: bool = False) -> list[str]:
     """Rows as Rich markup, with the gradient running down the body.
 
-    Two rows per shade rather than a per-row interpolation: the bear is
-    sixteen rows tall and a gradient that fine just looks like noise on a
+    Two rows per shade rather than a per-row interpolation: the dog is
+    eighteen rows tall and a gradient that fine just looks like noise on a
     terminal that quantises colour.
     """
     palette = MOOD_SHADES.get(mood, shades)
