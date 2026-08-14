@@ -301,10 +301,9 @@ under budget.
 ## Things still open
 
 - The repo is private, so the install URL in the README 404s for anyone else.
-- No CI. 251 tests exist and nothing runs them on push.
-- Dependencies float and there is no lockfile; a breaking release upstream
-  breaks new installs, and nothing here would notice.
-- Not published to PyPI; install is git-only.
+- Not published to PyPI; install is git-only. `uv.lock` is used by CI and by
+  anyone working in a clone; `uv tool install git+...` still resolves fresh
+  within the pyproject bounds, so the caps are what protect a plain install.
 - Poisoned *content* is not covered by the approval gate. A session that read a
   hostile file can leave a misleading fact behind — not code, but something the
   agent will believe later. Origin is recorded, `--dry-run` shows what a
@@ -312,4 +311,4 @@ under budget.
 - No full-store backup/restore; export is a filtered Markdown block.
 - The `anthropic` backend proper is unexercised — `exec` covers the same path.
 - Ollama keeps generating after a client timeout; handled, not elegant.
-- Python 3.10 and 3.11 are both run and green; nothing older or newer is.
+- Python 3.10 through 3.13 are run in CI; nothing outside that range is.

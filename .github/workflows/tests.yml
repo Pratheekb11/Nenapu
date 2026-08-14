@@ -1,0 +1,71 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # 3.10 through 3.13 are all run rather than assumed. `requires-python`
+    # claimed >= 3.10 for months while only 3.11 had ever executed the suite.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # `--locked` rather than a fresh resolve: the point of committing a
+      # lockfile is that CI runs what a user gets, not what PyPI happens to be
+      # serving this morning.
+      - run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
+      - run: uv run --no-sync pytest -q
+
+  packaging:
+    # The suite puts `src` on the path itself, so every test can pass while the
+    # thing a user actually installs is broken — a missing entry point, a
+    # module left out of the wheel. This job installs it the way they do.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: the lockfile matches pyproject
+        run: uv lock --check
+
+      - name: install as a tool, the way a user does
+        run: |
+          uv tool install .
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: the CLI runs
+        run: |
+          nenapu version --plain
+          nenapu rules > /dev/null
+
+      - name: the MCP server completes a handshake
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1"}}}' \
+            | timeout 30 nenapu-mcp | tee /dev/stderr | grep -q '"serverInfo"'
+
+      - name: a new store is owner-only
+        # The store holds facts extracted from private sessions. This was 0644
+        # for the whole life of the project before anyone looked.
+        run: |
+          nenapu write "ci wrote this" --scope ci > /dev/null
+          test "$(stat -c '%a' ~/.nenapu/nenapu.db)" = "600"
+          test "$(stat -c '%a' ~/.nenapu)" = "700"
+
+      - name: a hook never breaks the session that calls it
+        # Every one of these must exit 0. A Stop hook that fails takes the
+        # user's session down with it.
+        run: |
+          echo 'not json'                                  | nenapu observe --stdin
+          echo '{"transcript_path":"/nope/missing.jsonl"}' | nenapu observe --stdin
+          nenapu recall-hook --db /proc/forbidden.db

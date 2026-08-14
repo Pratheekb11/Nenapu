@@ -5,18 +5,23 @@ description = "Portable, self-verifying memory and skill substrate for AI agents
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+# Upper bounds, because this is installed as a tool into its own environment
+# rather than resolved alongside someone else's application: a cap costs
+# nothing here and an uncapped dependency is how a working install breaks on a
+# machine that did nothing but run it a month later. `mcp` went 1.x -> 2.0
+# under this project without anyone choosing that.
 dependencies = [
-    "typer>=0.12",
-    "rich>=13.0",
-    "fastapi>=0.110",
-    "uvicorn>=0.29",
-    "pydantic>=2.6",
-    "mcp>=1.2",
-    "anthropic>=0.40",
+    "typer>=0.12,<0.28",
+    "rich>=13.0,<16",
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.29,<1.0",
+    "pydantic>=2.6,<3.0",
+    "mcp>=1.2,<3.0",
+    "anthropic>=0.40,<1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27"]
+dev = ["pytest>=8.0,<10", "httpx>=0.27,<1.0"]
 
 [project.scripts]
 nenapu = "nenapu.cli:app"
