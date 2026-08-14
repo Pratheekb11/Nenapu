@@ -300,7 +300,7 @@ under budget.
 
 ## The pet is drawn, not typed
 
-Braille cells carry 2x4 dots, so a 24-column block of them is an 88x76 bitmap —
+Braille cells carry 2x4 dots, so a 32-column block of them is an 84x58 bitmap —
 enough resolution for something that reads as an animal rather than as
 punctuation. The dog is therefore assembled from ellipses at runtime and a mood
 is a handful of pixel edits: eyes shut, brows down, mouth open, tongue out.
@@ -315,16 +315,25 @@ braille would have been nine drawings to redo.
 Three things the first drafts got wrong, each visible the moment it was
 printed:
 
-**A union of ellipses is a blob.** Head merged into body, ears melted into
-head, and the result read as a lump with two holes in it. Whatever sits in
-front now carves a slightly larger hole before filling its own shape — the gap
-is what makes the parts legible, exactly as in a paper cut-out.
+**A filled silhouette cannot be cute.** Three compositions were drawn before
+this one: a filled body with features carved out of it, then the same thing
+with chibi proportions, then a head on a small body. The first read as a stamp,
+and all three had the same flaw — parts competing for a small canvas, every
+feature shrinking until it turned to mush against the fill. The verdict on the
+second was "looks pirated", which is exactly right for a knock-off plush.
 
-**Two holes in a face are not eyes.** A carved white with a filled pupil inside
-it reads as looking at something; a plain hole reads as a hole. They also have
-to stay small: large carved whites turned the head into an outline drawing
-while the chest below was still filled, and the two halves stopped looking like
-one animal.
+What worked was inverting it: outlines and arcs, with the eyes as the only
+large filled shapes. An empty face means the eyes are the only thing to look
+at, and no body means nothing crowds the mouth. Cute is uncluttered before it
+is anything else.
+
+**A catchlight goes beside the eye, not inside it.** Braille has no grey to
+soften a hole with, so a 3px bite out of a 12px eye is a chunk missing — the
+eye reads as cracked rather than as shiny.
+
+**Ears carry the species.** Filled and hanging, the same head is a puppy;
+outlined and perched, it is a balloon with two rings on it. They are the only
+heavy shapes besides the eyes for exactly that reason.
 
 **`⠀` is U+2800, not a space.** The canvas is sized for the shapes rather than
 the result, so the dog arrived inside a wide frame of blank braille that

@@ -5,10 +5,10 @@ bitmap — enough resolution for something that reads as an animal rather than a
 punctuation. The alternative was hand-typing fifteen lines of ⣿⣦⠿ per mood,
 which is unmaintainable the moment an eye needs to move one dot to the left.
 
-So the dog is drawn instead: a silhouette assembled from ellipses, with the
-face carved back out of it. A mood is then a handful of pixel edits — eyes
-shut, mouth open, brows down — rather than a separate picture, which is what
-keeps nine moods from becoming nine drawings that slowly stop matching.
+So the dog is drawn instead: outlines and arcs, with the eyes as the only
+large filled shapes on it. A mood is then a handful of pixel edits — eyes shut,
+mouth open, brows down, tongue out — rather than a separate picture, which is
+what keeps nine moods from becoming nine drawings that slowly stop matching.
 """
 
 from __future__ import annotations
@@ -47,6 +47,21 @@ class Canvas:
              thickness: float = 1.6, on: int = 1) -> None:
         self.ellipse(cx, cy, rx, ry, on)
         self.ellipse(cx, cy, rx - thickness, ry - thickness, 0 if on else 1)
+
+    def arc(self, cx: float, cy: float, rx: float, ry: float,
+            start: float, end: float, thickness: float = 1.2, on: int = 1) -> None:
+        """A stroked piece of an ellipse, in radians clockwise from 3 o'clock.
+
+        Line art needs open curves — a smile, a tail, the top of a paw — and an
+        outline is the wrong tool for those because it always closes.
+        """
+        import math
+
+        steps = max(12, int((end - start) * max(rx, ry)))
+        for i in range(steps + 1):
+            angle = start + (end - start) * i / steps
+            self.ellipse(cx + rx * math.cos(angle), cy + ry * math.sin(angle),
+                         thickness, thickness, on)
 
     def bar(self, x0: int, y0: int, x1: int, y1: int, on: int = 1) -> None:
         for y in range(min(y0, y1), max(y0, y1) + 1):
@@ -97,110 +112,101 @@ def _crop(rows: list[str]) -> list[str]:
 # 88x76 dots is 44 columns by 19 text rows. Bigger than a silhouette needs and
 # no bigger than a face needs: at half this the eyes were two dots wide and
 # every mood looked the same.
-W, H = 88, 76
-HEAD_CX, HEAD_CY = 44, 24
-HEAD_RX, HEAD_RY = 16, 14
+# 88x80 dots is 44 columns by 20 text rows.
+# 88x80 dots is 44 columns by 20 text rows.
+# 84x64 dots is 42 columns by 16 text rows.
+W, H = 84, 58
+HEAD_CX, HEAD_CY = 42, 27
+HEAD_RX, HEAD_RY = 25, 21
+
+# The composition went through a filled silhouette and a head-on-a-body before
+# this one. Both failed the same way: parts competing for a small canvas, and
+# every feature shrinking until it turned to mush. So there is no body. The
+# face fills the frame and two paws hook over the bottom, which is the pose
+# every cute animal drawing uses and the reason it works — the eyes get to be
+# enormous, and nothing else is asking for room.
+STROKE = 1.1
 
 
 def _body(c: Canvas) -> None:
-    """Ears, head, chest, legs, tail — everything that never changes with mood.
+    """Ears, head, paws. Everything that never changes with mood."""
+    # Ears hang off the top corners, filled, and they are the only heavy shapes
+    # besides the eyes. Outlined ears made the whole thing read as a balloon.
+    for side in (-1, 1):
+        c.ellipse(HEAD_CX + side * 23, HEAD_CY - 2, 9, 15, 0)
+        c.ellipse(HEAD_CX + side * 23, HEAD_CY - 2, 8, 14)
 
-    Order is the whole trick. A silhouette drawn as one union of ellipses is a
-    blob: the head merges into the chest, the ears melt into the head, and the
-    result reads as a lump with two holes in it. So whatever sits in front
-    carves a slightly larger hole before filling its own shape. The gap is what
-    makes the parts legible, exactly as in a paper cut-out.
-    """
-    # Tail, curling up and out behind the hip. Drawn as circles along a curve
-    # rather than as one shape, because an ellipse cannot bend.
-    for i in range(8):
-        t = i / 7
-        c.ellipse(HEAD_CX + 11 + 12 * t, 58 - 15 * t * t, 3.4 - t, 3.4 - t)
+    c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX + 1.6, HEAD_RY + 1.6, 0)
+    c.ring(HEAD_CX, HEAD_CY, HEAD_RX, HEAD_RY, STROKE + 0.5)
 
-    c.ellipse(HEAD_CX - 6, 64, 3.6, 6)               # front legs
-    c.ellipse(HEAD_CX + 6, 64, 3.6, 6)
-    c.ellipse(HEAD_CX - 6, 70, 4.6, 2.6)             # paws
-    c.ellipse(HEAD_CX + 6, 70, 4.6, 2.6)
-
-    c.ellipse(HEAD_CX, 54, 12, 12, 0)                # chest clears its gap
-    c.ellipse(HEAD_CX, 54, 10.5, 10.5)
-    c.ellipse(HEAD_CX, 56, 4.5, 4.5, 0)              # a paler chest patch
-
-    # Collar. Nothing else in the drawing says "someone's dog" this cheaply.
-    c.bar(HEAD_CX - 9, 40, HEAD_CX + 9, 42)
-    c.ellipse(HEAD_CX, 44, 2.2, 2.2)
-
-    # Ears hang. This is the single line between this animal and the bear it
-    # used to be: long, low, and reaching the jaw rather than perched on top.
-    c.ellipse(HEAD_CX - 17, HEAD_CY + 4, 5, 11)
-    c.ellipse(HEAD_CX + 17, HEAD_CY + 4, 5, 11)
-
-    c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX + 1.2, HEAD_RY + 1.2, 0)
-    c.ellipse(HEAD_CX, HEAD_CY, HEAD_RX, HEAD_RY)
+    # No paws, no body. Both were tried and both crowded the chin until the
+    # mouth stopped being legible. Cute is uncluttered before it is anything
+    # else, and the face is carrying the mood on its own.
 
 
 def _muzzle(c: Canvas, *, open_mouth: bool = False, smile: bool = True) -> None:
-    """A snout, longer than it is wide, with the nose filled back in at the tip.
+    """A tiny nose set low, and a mouth of two small arcs."""
+    import math
 
-    The tongue is not decoration: it is the difference between a dog that is
-    fine and a dog that is pleased, and those are two different store states.
-    """
-    c.ellipse(HEAD_CX, HEAD_CY + 7, 6.5, 5, 0)
-    c.ellipse(HEAD_CX, HEAD_CY + 4, 2.6, 2.0)        # nose
-    c.set(HEAD_CX, HEAD_CY + 6)                      # philtrum, down to the mouth
-    c.set(HEAD_CX, HEAD_CY + 7)
+    c.ellipse(HEAD_CX, HEAD_CY + 9, 3.2, 2.4)                 # nose
+    c.bar(HEAD_CX, HEAD_CY + 11, HEAD_CX, HEAD_CY + 13)       # philtrum
 
     if open_mouth:
-        c.ellipse(HEAD_CX, HEAD_CY + 9, 2.8, 2.4)
+        c.ellipse(HEAD_CX, HEAD_CY + 15, 3.6, 3.2, 0)
+        c.ring(HEAD_CX, HEAD_CY + 15, 3.6, 3.2, STROKE)
         return
-    for dx in (-4, -3, -2, 2, 3, 4):
-        y = HEAD_CY + 8 + ((abs(dx) - 2) // 2 if smile else -((abs(dx) - 2) // 2))
-        c.set(HEAD_CX + dx, y)
-        c.set(HEAD_CX + dx, y + 1)
-    if smile:                                        # tongue
-        c.ellipse(HEAD_CX, HEAD_CY + 11, 2.2, 2.6)
+    if smile:
+        for side in (-1, 1):
+            c.arc(HEAD_CX + side * 4, HEAD_CY + 12, 4, 3.2, 0.15, math.pi - 0.15,
+                  STROKE)
+        c.ellipse(HEAD_CX, HEAD_CY + 16, 2.2, 2.2)            # tongue
+    else:
+        for side in (-1, 1):
+            c.arc(HEAD_CX + side * 4, HEAD_CY + 16, 4, 3.2,
+                  math.pi + 0.15, 2 * math.pi - 0.15, STROKE)
 
 
 def _eyes(c: Canvas, style: str) -> None:
-    """Whites carved out of the head, pupils filled back in.
+    """Big, filled, low on the face, with a catchlight punched out.
 
-    Two levels rather than one: a plain hole reads as a hole, and a dog with
-    two holes in its face is not looking at anything.
+    They are the only large dark shapes on an empty face, which is what makes
+    it read as looking back rather than as a circle with marks in it.
     """
-    left, right, y = HEAD_CX - 7, HEAD_CX + 7, HEAD_CY - 3
-    if style == "closed":
+    import math
+
+    left, right, y = HEAD_CX - 11, HEAD_CX + 11, HEAD_CY + 2
+    if style == "closed":                                     # happy ∪ arcs
         for cx in (left, right):
-            for dx in range(-3, 4):
-                yy = y + (1 if abs(dx) > 1 else 0)
-                c.set(cx + dx, yy, 0)
-                c.set(cx + dx, yy + 1, 0)
+            c.arc(cx, y - 2, 5.5, 4.5, 0.2, math.pi - 0.2, 1.3)
         return
     if style == "cross":
         for cx in (left, right):
-            for d in range(-3, 4):
+            for d in range(-5, 6):
                 for t in (0, 1):
-                    c.set(cx + d + t, y + d, 0)
-                    c.set(cx + d + t, y - d, 0)
+                    c.set(cx + d + t, y + d)
+                    c.set(cx + d + t, y - d)
         return
-    # Small enough that the head stays a solid shape. Big carved whites turned
-    # it into an outline drawing while the chest below was still filled in, and
-    # the two halves stopped looking like one animal.
-    white = {"wide": 3.4, "normal": 2.8, "narrow": 2.8}[style]
+    rx = {"wide": 7.0, "normal": 6.0, "narrow": 6.0}[style]
+    ry = rx * (0.28 if style == "narrow" else 1.2)
     for cx in (left, right):
-        c.ellipse(cx, y, white, white * (0.4 if style == "narrow" else 1.0), 0)
-        c.ellipse(cx, y, 1.4, 1.4 if style != "narrow" else 0.9)
+        c.ellipse(cx, y, rx, ry)
+    # The catchlight goes *beside* the eye, not inside it. Punched out of the
+    # fill it reads as a crack — braille has no grey to soften a hole with, so
+    # a 3px bite out of a 12px eye is simply a chunk missing.
+    if style != "narrow":
+        for cx in (left, right):
+            c.ellipse(cx - rx * 0.55, y - ry * 0.75, 1.4, 1.4, 0)
 
 
 def _brows(c: Canvas, angle: str) -> None:
-    """Worry is mostly eyebrows. Without them every mood is mildly surprised,
-    and a dog's brow spots are doing this job anyway."""
+    """Worry is mostly eyebrows. Without them every mood is mildly surprised."""
     if angle == "none":
         return
-    for side, cx in ((-1, HEAD_CX - 6.5), (1, HEAD_CX + 6.5)):
-        for dx in range(-4, 5):
+    for side, cx in ((-1, HEAD_CX - 11), (1, HEAD_CX + 11)):
+        for dx in range(-5, 6):
             drop = int(dx * side * 0.7) if angle == "down" else int(-dx * side * 0.7)
-            c.set(round(cx) + dx, HEAD_CY - 10 + drop, 0)
-            c.set(round(cx) + dx, HEAD_CY - 9 + drop, 0)
+            c.set(cx + dx, HEAD_CY - 11 + drop)
+            c.set(cx + dx, HEAD_CY - 10 + drop)
 
 
 # Each mood is the same dog with a different face. Nothing here draws a new

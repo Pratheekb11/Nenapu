@@ -187,23 +187,18 @@ week.
 ```
 $ nenapu pet
 
-⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣄⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⣠⣴⠟⠛⣡⣼⣿⣤⡙⠛⢷⣤⡀⠀⠀⠀⠀⠀⠀
-⠀⢠⣴⠄⣼⣿⡀⢾⡿⢛⣿⣿⣿⡛⢿⡦⢘⣿⡄⢴⣤⠀⠀⠀
-⢠⣿⡟⢸⣿⣿⡿⢂⡐⢿⣿⣿⣿⡿⢂⡐⢿⣿⣿⠘⣿⣧⠀⠀
-⢸⣿⣇⢹⣿⣿⣶⣿⣿⡶⣿⣿⡿⣶⣿⣿⣶⣿⣿⢁⣿⣿⠀⠀
-⢹⣿⣿⡌⢿⣿⣿⣿⠃⠀⢛⣟⠃⠀⢻⣿⣿⣿⠏⣼⣿⣿⠁⠀
-⠸⣿⣿⣿⡮⠻⢿⣿⣆⡀⢿⣿⠇⣀⣾⣿⠿⠫⣾⣿⣿⡿⠀⠀   sick   1 thing it believed stopped being true
-⠀⠹⢿⠿⠁⠀⠀⠉⠙⠛⠛⠞⠛⠛⠉⠁⠀⠀⠹⢿⠿⠁⠀⠀
-⠀⠀⠀⠀⠀⠀⠸⠿⠿⠿⢿⣿⠿⠿⠿⠿⠀⠀⠀⠀⠀⢠⣶⣦   12 facts, 3 learned today
-⠀⠀⠀⠀⠀⠀⠀⢀⣴⣾⣿⣿⣿⣶⣄⠀⠀⠀⠀⠀⢠⣾⣿⠋   last fed just now, observed a session 14m ago
-⠀⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⣠⣾⣿⡏⠀   a check that used to pass is failing — nenapu loops
-⠀⠀⠀⠀⠀⠀⣿⣿⣿⠋⠀⠀⠈⢻⣿⣿⡇⣀⣴⣿⣿⠏⠀⠀
-⠀⠀⠀⠀⠀⠀⢻⣿⣿⡀⠀⠀⠀⣸⣿⣿⢃⣿⣿⡿⠋⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⢠⡙⢿⣿⣶⣶⣾⣿⠟⣡⠚⠋⠉⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⢸⣿⣶⣬⠉⠉⢩⣴⣾⣿⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⣶⣿⣿⣷⡆⠀⣶⣿⣿⣷⡆⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠉⠉⠁⠀⠀⠀⠉⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣄⣀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⢀⠀⠀⠀⣀⡤⠖⠛⠉⠉⠀⠀⠀⠀⠈⠉⠙⠓⠦⣄⡀⠀⠀⢀⠀⠀⠀⠀
+⠀⠀⣰⣾⣿⠟⣠⠞⠉⠀⠀⢀⣤⠆⠀⠀⠀⠀⠀⢦⣄⠀⠀⠈⠙⢦⡘⢿⣿⣶⡀⠀
+⠀⣸⣿⣿⢃⡼⠁⠀⣠⡴⠛⠋⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠳⣤⡀⠀⠹⣄⢻⣿⣿⡀   sick   1 thing it believed stopped being true
+⠀⣿⣿⠇⣼⠁⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⢹⡄⢿⣿⡇
+⠐⣿⣿⢀⡇⠀⠀⠀⠙⢦⡀⢀⡴⠋⠀⠀⠀⠀⠀⠙⢦⡀⢀⡴⠋⠀⠀⠀⣇⢸⣿⡗   12 facts, 3 learned today
+⠀⣿⣿⠀⣇⠀⠀⠀⠀⢀⡽⢯⡀⠀⠀⠀⠀⠀⠀⠀⢀⡽⢯⡀⠀⠀⠀⢀⡇⢸⣿⡇   last fed just now, observed a session 14m ago
+⠀⠸⣿⣇⢹⡄⠀⠀⠴⠋⠀⠀⠙⠦⠀⣠⣤⡀⠀⠴⠋⠀⠀⠙⠦⠀⠀⣼⢁⣿⡿⠀   a check that used to pass is failing — nenapu loops
+⠀⠀⠘⠻⢆⠹⣄⠀⠀⠀⠀⠀⠀⠀⠈⢻⣿⠋⠀⠀⠀⠀⠀⠀⠀⢀⡼⢁⠾⠛⠀⠀
+⠀⠀⠀⠀⠀⠀⠈⠳⣤⡀⠀⠀⠀⠀⢰⠉⠈⢱⠀⠀⠀⠀⠀⣠⡴⠋⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠓⠶⢤⣤⣀⣙⣚⣁⣠⣤⠴⠖⠋⠁⠀⠀⠀⠀⠀⠀⠀⠀
+⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
 ```
 
 Every mood is a real signal with a threshold you can argue with. Hungry because
@@ -218,8 +213,8 @@ drawn in your theme colour either — a calm teal dog with its eyes crossed stil
 reads as fine at a glance.
 
 The dog is drawn rather than typed. Braille cells carry 2x4 dots, so the block
-above is an 88x76 bitmap assembled from ellipses, and a mood is a few pixel
-edits — eyes shut, brows down, mouth open, tongue out — rather than a separate
+above is an 84x58 bitmap of outlines and arcs, and a mood is a few pixel edits
+— eyes shut, brows down, mouth open, tongue out — rather than a separate
 picture. Nine hand-typed drawings would have started drifting apart on the
 first change.
 
