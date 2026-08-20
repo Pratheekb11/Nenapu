@@ -219,6 +219,121 @@ def test_suspect_facts_are_flagged_not_silently_included(store):
     assert "Do not rely on these" in block
 
 
+# ---------- Task 14 (priority-ordered task list): the recall ledger on the
+# hook path ----------
+#
+# `recall_context()` reads via `store.list_facts()` (observer.py:298), which
+# is a plain SELECT — it does not log a recall and does not bump `use_count`.
+# Only `Store.search()` does that (store.py:547-556). Measured against the
+# live store: `recalls` has 3 rows, all `session_id=NULL`, all `pending`,
+# and `use_count > 0` on only 3 of 367 facts. That silence is the reason
+# `fact_edges` is empty (no recall -> `graph.infer_edges_for` finds no
+# parents) and the outcome ledger never grades anything. This is the
+# load-bearing bug the plan calls "the belief network is inert" — everything
+# downstream of a recall (edges, grading, `nenapu why`, `nenapu doubts`)
+# depends on a recall having actually been logged.
+#
+# Task 14's fix: `recall_context()` takes a `session_id` and logs the
+# injected set as recalls via `Ledger.log_many` (reused, not re-implemented
+# — the injection has no query, so BM25 is not involved; log with
+# `query=""` to mark these as session-start injections), and bumps
+# `use_count` via the existing `Store.mark_used`. Edge inference from a
+# blanket 12-fact injection is explicitly *not* part of this task (the plan
+# calls that out as a separate, deliberate design decision under the
+# `builds_on` schema field, which rides Task 9's extraction call) — these
+# tests only cover the recall log and the use-count bump.
+
+
+def test_a_session_start_injection_logs_a_recall_per_fact(store):
+    fact, _ = store.write(Fact(text="Endpoints go in services/auth/routes.",
+                               kind=Kind.PROJECT, confidence=0.9))
+
+    recall_context(store, session_id="s1")
+
+    rows = store.conn.execute(
+        "SELECT * FROM recalls WHERE fact_id = ?", (fact.id,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "s1"
+    assert rows[0]["query"] == ""
+
+
+def test_a_session_start_injection_bumps_use_count(store):
+    fact, _ = store.write(Fact(text="Endpoints go in services/auth/routes.",
+                               kind=Kind.PROJECT, confidence=0.9))
+    assert fact.use_count == 0
+
+    recall_context(store, session_id="s1")
+
+    reloaded = store.get(fact.id)
+    assert reloaded.use_count == 1
+
+
+def test_without_a_session_id_no_recall_is_logged(store):
+    """Backward compatible: a caller that does not pass `session_id` (there
+    should be none left after Task 14, but nothing else should silently start
+    logging session_id=NULL recalls either — that was exactly the measured
+    bug) gets the same behaviour as before, not a crash."""
+    fact, _ = store.write(Fact(text="Endpoints go in services/auth/routes.",
+                               kind=Kind.PROJECT, confidence=0.9))
+
+    recall_context(store)
+
+    rows = store.conn.execute(
+        "SELECT * FROM recalls WHERE fact_id = ?", (fact.id,)
+    ).fetchall()
+    assert rows == []
+
+
+def test_a_suspect_fact_shown_as_a_warning_is_still_logged_as_recalled(store):
+    """A suspect fact injected under the warning banner was still surfaced
+    into the session's context — the outcome ledger needs to know that to
+    ever grade whether showing the warning helped."""
+    fact, _ = store.write(Fact(text="Endpoints go in services/auth/routes.",
+                               kind=Kind.PROJECT, confidence=0.9))
+    store.conn.execute("UPDATE facts SET status=? WHERE id=?", (Status.SUSPECT, fact.id))
+    store.conn.commit()
+
+    recall_context(store, session_id="s1")
+
+    rows = store.conn.execute(
+        "SELECT * FROM recalls WHERE fact_id = ?", (fact.id,)
+    ).fetchall()
+    assert len(rows) == 1
+
+
+def test_recall_hook_reads_the_session_start_payload(tmp_path):
+    """The `SessionStart` payload carries `session_id` (and `cwd`, same shape
+    `learn --stdin` already parses at `cli.py:1029-1031`) — but `recall_hook`
+    (`cli.py:912`) currently ignores stdin entirely and calls
+    `recall_context(store)` with nothing. This drives the real CLI command,
+    not `recall_context` directly, to pin that the hook actually reads and
+    forwards it."""
+    import json
+    import subprocess
+    import sys
+    import os
+
+    db = tmp_path / "s.db"
+    conn = connect(str(db))
+    fact_store = Store(conn)
+    fact_store.write(Fact(text="Endpoints go in services/auth/routes.",
+                          kind=Kind.PROJECT, confidence=0.9))
+
+    payload = json.dumps({"session_id": "hook-session-1", "cwd": str(tmp_path)})
+    env = {**os.environ, "PYTHONPATH": "src", "NENAPU_NO_BANNER": "1"}
+    result = subprocess.run(
+        [sys.executable, "-m", "nenapu.cli", "recall-hook", "--db", str(db)],
+        input=payload, capture_output=True, text=True, env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    row = conn.execute(
+        "SELECT session_id FROM recalls WHERE session_id = 'hook-session-1'"
+    ).fetchone()
+    assert row is not None, "recall-hook did not forward the SessionStart session_id"
+
+
 # ---------- the hook contract ----------
 
 
