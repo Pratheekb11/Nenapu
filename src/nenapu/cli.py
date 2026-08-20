@@ -17,7 +17,7 @@ from .audit import LLMUnavailable
 from .audit import audit as run_audit
 from .distill import distill as run_distill
 from .export import render, write_file
-from .models import Fact, Skill, Status
+from .models import Fact, Kind, Skill, Status
 from .store import DAY, effective_confidence, now
 from .verify import run_check, apply_result, verify_scope
 
@@ -423,7 +423,9 @@ def version(plain: bool = typer.Option(False, "--plain", help="Version string on
 def remember(
     text: str,
     kind: str = typer.Option("project", help="user|project|environment|feedback|reference"),
-    scope: str = "global",
+    scope: str = typer.Option(
+        "", help="Scope; omit to infer from kind (user/feedback: global, else: this project)"
+    ),
     key: str = typer.Option("", help="Contradiction join key, e.g. db.port"),
     origin: str = typer.Option("user_stated", help="user_stated|tool_observed|file_derived|agent_inferred"),
     confidence: float = 0.8,
@@ -433,10 +435,15 @@ def remember(
     db: str = DB_OPT,
 ) -> None:
     """Store a fact."""
+    from .store import project_scope
+
     store, _ = _stores(db)
+    resolved_scope = scope or (
+        "global" if kind in (Kind.USER, Kind.FEEDBACK) else project_scope(os.getcwd())
+    )
     fact, conflicts = store.write(
         Fact(
-            text=text, kind=kind, scope=scope, key=key or None, origin=origin,
+            text=text, kind=kind, scope=resolved_scope, key=key or None, origin=origin,
             confidence=confidence, decay_class=decay or None,
             verify_cmd=verify_cmd or None, verify_expect=verify_expect or None,
         ),

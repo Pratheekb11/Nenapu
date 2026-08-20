@@ -13,12 +13,15 @@ The rules that make this different from a notes file:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import math
 import random
 import re
 import sqlite3
+import subprocess
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Iterable, Sequence
 
 from .graph import Graph
@@ -59,6 +62,26 @@ SUSPECT_PENALTY = 0.35
 # than running a command that proves it. Each soft confirmation costs a little
 # base confidence, so a fact sustained only by model opinion still declines.
 SOFT_VERIFY_DISCOUNT = 0.9
+
+
+def project_scope(cwd: str) -> str:
+    """A stable scope id for the repo containing `cwd`, or `cwd` itself
+    outside a repo. Hashes the absolute path so two clones sharing a
+    directory name (`~/work/backend`, `~/other/backend`) do not collide.
+    """
+    path = Path(cwd).resolve()
+    root = path
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=path, capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            root = Path(result.stdout.strip()).resolve()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    digest = hashlib.sha1(str(root).encode()).hexdigest()[:8]
+    return f"repo:{root.name}@{digest}"
 
 
 def decay_factor(decay_class: str, age_seconds: float) -> float:
@@ -204,7 +227,7 @@ class Store:
 
     def list_facts(
         self,
-        scope: str | None = None,
+        scope: str | Sequence[str] | None = None,
         status: str | Sequence[str] | None = Status.ACTIVE,
         kind: str | None = None,
         limit: int = 500,
@@ -212,8 +235,9 @@ class Store:
         sql = "SELECT * FROM facts WHERE 1=1"
         args: list = []
         if scope:
-            sql += " AND scope = ?"
-            args.append(scope)
+            scopes = [scope] if isinstance(scope, str) else list(scope)
+            sql += f" AND scope IN ({','.join('?' * len(scopes))})"
+            args.extend(scopes)
         if status:
             statuses = [status] if isinstance(status, str) else list(status)
             sql += f" AND status IN ({','.join('?' * len(statuses))})"
@@ -476,7 +500,7 @@ class Store:
         self,
         query: str,
         *,
-        scope: str | None = None,
+        scope: str | Sequence[str] | None = None,
         limit: int = 10,
         min_confidence: float = 0.0,
         include_disputed: bool = True,
@@ -502,8 +526,9 @@ class Store:
             )
             args: list = [fts_query, *statuses]
             if scope:
-                sql += " AND f.scope = ?"
-                args.append(scope)
+                scopes = [scope] if isinstance(scope, str) else list(scope)
+                sql += f" AND f.scope IN ({','.join('?' * len(scopes))})"
+                args.extend(scopes)
             sql += " ORDER BY rank LIMIT ?"
             args.append(limit * 5)
             try:
