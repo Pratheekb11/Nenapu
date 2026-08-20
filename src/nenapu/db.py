@@ -251,6 +251,24 @@ CREATE TABLE IF NOT EXISTS commits (
 );
 
 CREATE INDEX IF NOT EXISTS idx_commits_session ON commits(session_id);
+
+-- Durable, single-flight ingestion queue. The Stop hook enqueues and
+-- returns; one worker holding an exclusive lock drains this strictly
+-- serially, so sessions ending together never fan out into concurrent
+-- model calls against the one store.
+CREATE TABLE IF NOT EXISTS ingest_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    path        TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    session_id  TEXT,
+    enqueued_at REAL NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'pending',  -- pending | claimed | done | failed
+    claimed_at  REAL,
+    finished_at REAL,
+    detail      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_queue_state ON ingest_queue(state, enqueued_at);
 """
 
 
