@@ -143,7 +143,7 @@ def main(ctx: typer.Context) -> None:
     # Hooks are machine-to-machine. `recall-hook` writes into a session's
     # context and `observe` runs headless after one ends; a mark on either is
     # noise in a log at best and content in a prompt at worst.
-    if not quiet and ctx.invoked_subcommand not in ("version", "recall-hook", "observe"):
+    if not quiet and ctx.invoked_subcommand not in ("version", "recall-hook", "observe", "learn"):
         err_console.print(stamp(__version__))
 
 
