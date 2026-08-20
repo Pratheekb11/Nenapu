@@ -361,6 +361,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("bad_recalls", "INTEGER NOT NULL DEFAULT 0"),
         ("suspect_since", "REAL"),
         ("suspect_reason", "TEXT"),
+        ("agent", "TEXT"),
     ],
 }
 

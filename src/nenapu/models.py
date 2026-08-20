@@ -8,6 +8,7 @@ it.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclasses_fields
@@ -137,12 +138,15 @@ class Fact:
     bad_recalls: int = 0
     suspect_since: float | None = None
     suspect_reason: str | None = None
+    agent: str | None = None
 
     def __post_init__(self) -> None:
         if self.decay_class is None:
             self.decay_class = DEFAULT_DECAY.get(self.kind, Decay.MEDIUM)
         if self.last_verified_at is None:
             self.last_verified_at = self.created_at
+        if self.agent is None:
+            self.agent = os.environ.get("NENAPU_AGENT") or None
 
 
 @dataclass

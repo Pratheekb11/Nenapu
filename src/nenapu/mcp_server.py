@@ -144,7 +144,7 @@ def memory_write(
         verify_expect=verify_expect or None,
         session_id=session_id or None,
     )
-    stored, conflicts = store.write(fact, derived_from=derived_from)
+    stored, conflicts = store.write(fact, actor="mcp", derived_from=derived_from)
 
     result: dict = {"id": stored.id, "confidence": round(effective_confidence(stored), 2)}
     if stored.verify_cmd:
