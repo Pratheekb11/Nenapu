@@ -1127,6 +1127,10 @@ def learn(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be stored"),
     detach: bool = typer.Option(False, "--detach",
                                 help="Hand the work to a background process and return"),
+    no_infer: bool = typer.Option(
+        False, "--no-infer",
+        help="Store turns verbatim and skip the model (needs NENAPU_STORE_MESSAGES=1)",
+    ),
     db: str = DB_OPT,
 ) -> None:
     """Learn from a finished session without being asked.
@@ -1135,7 +1139,7 @@ def learn(
     and stores them. Wired to Claude Code's Stop hook, this is what makes the
     layer passive: the agent never has to decide to record anything.
     """
-    from .observer import hook_payload, observe_transcript
+    from .observer import hook_payload, messages_from_transcript, observe_transcript, store_messages
 
     session_id = None
     path = transcript
@@ -1158,6 +1162,23 @@ def learn(
         if from_stdin:
             raise typer.Exit(0)  # a hook with no transcript is not an error
         raise typer.BadParameter("no transcript path (pass one, or --stdin from a hook)")
+
+    if no_infer:
+        # Never calls the model — the whole point is a cheap way to inspect
+        # what a transcript contains without spending an extraction on it.
+        store, _ = (open_store(db or os.environ.get("NENAPU_DB")) if from_stdin
+                    else _stores(db))
+        pairs = messages_from_transcript(Path(path))
+        stored = store_messages(store.conn, session_id, pairs)
+        if from_stdin:
+            raise typer.Exit(0)
+        if stored:
+            console.print(f"{stored} message(s) stored verbatim")
+        else:
+            console.print(
+                "[dim]nothing stored — set NENAPU_STORE_MESSAGES=1 to enable[/]"
+            )
+        return
 
     if detach:
         # Extraction is a model call over an entire session — 83s against real

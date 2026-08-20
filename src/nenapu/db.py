@@ -287,6 +287,21 @@ CREATE TABLE IF NOT EXISTS rollups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rollups_scope ON rollups(project_scope, period);
+
+-- Working memory: verbatim turns, privacy-gated and off by default (see
+-- NENAPU_STORE_MESSAGES in observer.py). Everything else in this file holds
+-- extracted, redacted facts; this is the one table that can hold raw
+-- conversation, so it exists behind an explicit opt-in.
+CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT,
+    seq        INTEGER NOT NULL,
+    role       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 """
 
 

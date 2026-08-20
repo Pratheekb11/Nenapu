@@ -28,11 +28,14 @@ is least likely to record about itself.
 from __future__ import annotations
 
 import json
+import os
 import re
+import sqlite3
 from pathlib import Path
 
+from .db import commit, transaction
 from .llm import Backend, LLMUnavailable, detect_backend, structured
-from .models import Fact, Kind, Origin, Status
+from .models import Fact, Kind, Origin, Status, now
 from .store import Store, effective_confidence
 
 # Keep the injected block small. It is prepended to every session, so it is
@@ -153,8 +156,8 @@ def redact(text: str) -> str:
     return re.sub(_ASSIGNED, _assignment, text)
 
 
-def _turns_from(lines: list[str]) -> list[str]:
-    turns: list[str] = []
+def _role_text_pairs(lines: list[str]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
     for line in lines:
         if not line.strip():
             continue
@@ -180,8 +183,12 @@ def _turns_from(lines: list[str]) -> list[str]:
             text = content if isinstance(content, str) else ""
         text = text.strip()
         if text:
-            turns.append(f"{role}: {text}")
-    return turns
+            pairs.append((role, text))
+    return pairs
+
+
+def _turns_from(lines: list[str]) -> list[str]:
+    return [f"{role}: {text}" for role, text in _role_text_pairs(lines)]
 
 
 def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str:
@@ -230,6 +237,72 @@ def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str
     # model call, the dry run, the store — sees the redacted version and there
     # is no path that forgets to ask.
     return redact(trimmed)
+
+
+# ---------- working memory: verbatim turns, `--no-infer` ----------
+#
+# Everything above extracts and discards the raw transcript. This is the one
+# path that keeps it — a real privacy change, since it is the first place
+# verbatim conversation lands on disk rather than distilled facts. Gated
+# behind `NENAPU_STORE_MESSAGES`, default off, and redacted the same way the
+# model-facing text is: the harvest-time invariant has to hold here too, or a
+# secret reaches the store by a route that did not exist before.
+
+
+def messages_from_transcript(path: Path, *, max_messages: int = 200) -> list[tuple[str, str]]:
+    """Every user/assistant turn in a transcript, redacted, oldest first.
+
+    Reuses the same tail-growing read `_read_transcript` uses for the model
+    prompt, so this stays a bounded read even against the largest transcripts
+    on disk rather than loading the whole file to keep the last few turns.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+
+    window = INITIAL_TAIL_BYTES
+    pairs: list[tuple[str, str]] = []
+    while True:
+        try:
+            if size > window:
+                with path.open("rb") as handle:
+                    handle.seek(size - window)
+                    raw = handle.read().decode("utf-8", errors="ignore")
+                lines = raw.split("\n")[1:]  # drop the partial first line
+            else:
+                lines = path.read_text(errors="ignore").splitlines()
+        except OSError:
+            return []
+
+        pairs = _role_text_pairs(lines)
+        if len(pairs) >= max_messages or window >= size or window >= MAX_TAIL_BYTES:
+            break
+        window *= 4
+
+    return [(role, redact(text)) for role, text in pairs[-max_messages:]]
+
+
+def store_messages(
+    conn: sqlite3.Connection, session_id: str | None, pairs: list[tuple[str, str]],
+) -> int:
+    """Persist verbatim turns, gated by `NENAPU_STORE_MESSAGES`.
+
+    The gate lives here rather than at each call site so it cannot be
+    forgotten by a caller — a store must opt in explicitly before any raw
+    conversation lands on disk, `--no-infer` alone is not enough.
+    """
+    if not os.environ.get("NENAPU_STORE_MESSAGES"):
+        return 0
+    with transaction(conn):
+        for seq, (role, text) in enumerate(pairs):
+            conn.execute(
+                "INSERT INTO messages(session_id, seq, role, text, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (session_id, seq, role, text, now()),
+            )
+        commit(conn)
+    return len(pairs)
 
 
 def observe_transcript(
