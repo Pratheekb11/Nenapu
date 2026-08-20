@@ -205,8 +205,8 @@ class Store:
                    confidence, decay_class, verify_cmd, verify_expect, tags_csv, status,
                    created_at, updated_at, last_verified_at, verify_status, verify_last_run,
                    verify_detail, supersedes_id, superseded_by_id, distilled_into_id,
-                   use_count, last_used_at, agent)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   use_count, last_used_at, agent, occurrences)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 fact.text, fact.kind, fact.scope, fact.key, fact.origin, fact.origin_ref,
                 fact.session_id, fact.confidence, fact.decay_class, fact.verify_cmd,
@@ -214,7 +214,7 @@ class Store:
                 fact.updated_at, fact.last_verified_at, fact.verify_status,
                 fact.verify_last_run, fact.verify_detail, fact.supersedes_id,
                 fact.superseded_by_id, fact.distilled_into_id, fact.use_count,
-                fact.last_used_at, fact.agent,
+                fact.last_used_at, fact.agent, fact.occurrences,
             ),
         )
         return replace(fact, id=cur.lastrowid)

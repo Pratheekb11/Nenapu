@@ -139,6 +139,7 @@ class Fact:
     suspect_since: float | None = None
     suspect_reason: str | None = None
     agent: str | None = None
+    occurrences: int = 1
 
     def __post_init__(self) -> None:
         if self.decay_class is None:

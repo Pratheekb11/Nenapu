@@ -308,8 +308,11 @@ def recall_context(store: Store, *, scope: str | None = None, limit: int = MAX_I
     if not sound and not suspect:
         return ""
 
-    # Corrections first — the whole point is not repeating a known mistake.
-    sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK, -pair[1]))
+    # Corrections first, and among them the ones said most often — a
+    # correction repeated five times is worth the budget more than one said
+    # once at the same confidence, and confidence alone cannot tell them
+    # apart when both were just asserted.
+    sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK, -pair[0].occurrences, -pair[1]))
     suspect.sort(key=lambda pair: -pair[1])
     chosen = sound[:limit] + suspect[:MAX_SUSPECT_INJECTED]
 
@@ -321,7 +324,7 @@ def recall_context(store: Store, *, scope: str | None = None, limit: int = MAX_I
 
     if corrections:
         lines.append("Previously corrected — do not repeat these:")
-        lines += [f"- {f.text}" for f in corrections]
+        lines += [_correction_line(f) for f in corrections]
         lines.append("")
     if others:
         lines.append("Known about this work:")
@@ -332,6 +335,15 @@ def recall_context(store: Store, *, scope: str | None = None, limit: int = MAX_I
         lines.append("Do not rely on these — what they rested on was falsified:")
         lines += [f"- {f.text}" for f in doubted]
     return "\n".join(lines).strip()
+
+
+def _correction_line(fact: Fact) -> str:
+    """A correction said more than once is called out by count — the most
+    actionable signal in the store, and one duplicate near-identical facts
+    used to destroy silently."""
+    if fact.occurrences > 1:
+        return f"- {fact.text} (said {fact.occurrences} times)"
+    return f"- {fact.text}"
 
 
 def hook_payload(raw: str) -> dict:

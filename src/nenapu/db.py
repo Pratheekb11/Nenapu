@@ -422,6 +422,7 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("suspect_since", "REAL"),
         ("suspect_reason", "TEXT"),
         ("agent", "TEXT"),
+        ("occurrences", "INTEGER NOT NULL DEFAULT 1"),
     ],
 }
 
