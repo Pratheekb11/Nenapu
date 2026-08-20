@@ -269,6 +269,24 @@ CREATE TABLE IF NOT EXISTS ingest_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_queue_state ON ingest_queue(state, enqueued_at);
+
+-- Downsampled activity: a work log compressed by age, not similarity. One
+-- row replaces a whole period's sessions once they age out of full detail.
+CREATE TABLE IF NOT EXISTS rollups (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_scope TEXT NOT NULL,
+    period        TEXT NOT NULL,  -- week | month
+    period_start  REAL NOT NULL,
+    period_end    REAL NOT NULL,
+    session_count INTEGER NOT NULL DEFAULT 0,
+    files_touched INTEGER NOT NULL DEFAULT 0,
+    commits       INTEGER NOT NULL DEFAULT 0,
+    loops_opened  INTEGER NOT NULL DEFAULT 0,
+    loops_closed  INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(project_scope, period, period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rollups_scope ON rollups(project_scope, period);
 """
 
 

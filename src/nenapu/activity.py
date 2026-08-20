@@ -93,6 +93,24 @@ class ActivityLedger:
         rows = self.conn.execute("SELECT DISTINCT project_scope FROM sessions")
         return [r["project_scope"] for r in rows]
 
+    def sessions_in_range(self, start: float, end: float) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM sessions WHERE started_at >= ? AND started_at < ?"
+            " ORDER BY started_at",
+            (start, end),
+        )
+        return [dict(r) for r in rows]
+
+    def delete_session(self, session_id: int) -> None:
+        """Removes a session and everything keyed to it. Called once a
+        session has been folded into a rollup row — the aggregate survives,
+        the raw detail does not need to."""
+        with transaction(self.conn):
+            self.conn.execute("DELETE FROM file_events WHERE session_id = ?", (session_id,))
+            self.conn.execute("DELETE FROM commits WHERE session_id = ?", (session_id,))
+            self.conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            commit(self.conn)
+
     # ---------- file events ----------
 
     def record_file_event(
@@ -174,6 +192,51 @@ class ActivityLedger:
             (project_scope, limit),
         )
         return [_commit_row(r) for r in rows]
+
+
+    # ---------- rollups ----------
+
+    def upsert_rollup(
+        self,
+        project_scope: str,
+        period: str,
+        period_start: float,
+        period_end: float,
+        *,
+        session_count: int = 0,
+        files_touched: int = 0,
+        commits: int = 0,
+    ) -> None:
+        with transaction(self.conn):
+            existing = self.conn.execute(
+                "SELECT id FROM rollups WHERE project_scope = ? AND period = ?"
+                " AND period_start = ?",
+                (project_scope, period, period_start),
+            ).fetchone()
+            if existing:
+                self.conn.execute(
+                    "UPDATE rollups SET session_count = session_count + ?,"
+                    " files_touched = files_touched + ?, commits = commits + ?,"
+                    " period_end = ? WHERE id = ?",
+                    (session_count, files_touched, commits, period_end, existing["id"]),
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO rollups(project_scope, period, period_start, period_end,"
+                    " session_count, files_touched, commits) VALUES (?,?,?,?,?,?,?)",
+                    (project_scope, period, period_start, period_end,
+                     session_count, files_touched, commits),
+                )
+            commit(self.conn)
+
+    def rollups_for_scope(self, project_scope: str, *, period: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM rollups WHERE project_scope = ?"
+        args: list = [project_scope]
+        if period:
+            sql += " AND period = ?"
+            args.append(period)
+        sql += " ORDER BY period_start"
+        return [dict(r) for r in self.conn.execute(sql, args)]
 
 
 def _commit_row(row: sqlite3.Row) -> dict:
