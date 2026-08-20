@@ -79,6 +79,20 @@ class ActivityLedger:
         )
         return [dict(r) for r in rows]
 
+    def recent_sessions(self, *, since_at: float | None = None, limit: int = 500) -> list[dict]:
+        sql = "SELECT * FROM sessions WHERE 1=1"
+        args: list = []
+        if since_at is not None:
+            sql += " AND started_at >= ?"
+            args.append(since_at)
+        sql += " ORDER BY started_at DESC LIMIT ?"
+        args.append(limit)
+        return [dict(r) for r in self.conn.execute(sql, args)]
+
+    def known_scopes(self) -> list[str]:
+        rows = self.conn.execute("SELECT DISTINCT project_scope FROM sessions")
+        return [r["project_scope"] for r in rows]
+
     # ---------- file events ----------
 
     def record_file_event(
@@ -144,6 +158,14 @@ class ActivityLedger:
             "SELECT * FROM commits WHERE session_id = ? ORDER BY at", (session["id"],)
         )
         return [_commit_row(r) for r in rows]
+
+    def file_events_for_scope(self, project_scope: str, *, limit: int = 500) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT fe.* FROM file_events fe JOIN sessions s ON s.id = fe.session_id"
+            " WHERE s.project_scope = ? ORDER BY fe.at DESC LIMIT ?",
+            (project_scope, limit),
+        )
+        return [dict(r) for r in rows]
 
     def commits_for_scope(self, project_scope: str, *, limit: int = 500) -> list[dict]:
         rows = self.conn.execute(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -41,6 +42,7 @@ NETWORK = "Belief network"
 UPKEEP = "Trust and upkeep"
 OUTCOMES = "Did it help?"
 DIAGNOSE = "Setup and diagnostics"
+ACTIVITY = "Activity ledger"
 
 app = typer.Typer(help=HELP, rich_markup_mode="rich")
 skill_app = typer.Typer(help="Skill library with an outcome loop", no_args_is_help=True)
@@ -913,6 +915,120 @@ def stats(scope: str = "", db: str = DB_OPT) -> None:
     for key, value in s.items():
         table.add_row(key, json.dumps(value) if isinstance(value, dict) else str(value))
     console.print(table)
+
+
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": DAY, "w": 7 * DAY}
+
+
+def _parse_since(spec: str) -> float:
+    """A duration like `1w`, `3d`, `12h` into seconds. Raises for anything else
+    rather than guessing, since a silently-wrong window is worse than a
+    rejected flag."""
+    match = re.fullmatch(r"(\d+)([smhdw])", spec.strip().lower())
+    if not match:
+        raise typer.BadParameter(f"invalid duration {spec!r} — expected e.g. 1w, 3d, 12h")
+    n, unit = match.groups()
+    return float(n) * _DURATION_UNITS[unit]
+
+
+def _ledger(db: str | None):
+    from .activity import ActivityLedger
+
+    store, _ = _stores(db)
+    return ActivityLedger(store.conn)
+
+
+def _session_line(session: dict) -> str:
+    ended = " (in progress)" if session["ended_at"] is None else ""
+    return f"[cyan]{session['project_scope']}[/] via {session['agent']}{ended}"
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def standup(db: str = DB_OPT) -> None:
+    """What happened recently, across every project."""
+    ledger = _ledger(db)
+    sessions = ledger.recent_sessions(since_at=now() - 2 * DAY)
+    if not sessions:
+        console.print("Nothing in the last two days.")
+        return
+    for session in sessions:
+        console.print(_session_line(session))
+        for event in ledger.file_events_for_session(session["id"]):
+            console.print(f"  {event['op']} [magenta]{event['path']}[/]")
+        for c in ledger.commits_for_session(session["id"]):
+            console.print(f"  commit {c['sha'][:8]} {c['subject'] or ''}")
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def activity(
+    since: str = typer.Option("1w", help="Duration back to look, e.g. 1w, 3d, 12h"),
+    db: str = DB_OPT,
+) -> None:
+    """Timeline of work, grouped by project and agent."""
+    ledger = _ledger(db)
+    sessions = ledger.recent_sessions(since_at=now() - _parse_since(since))
+    if not sessions:
+        console.print(f"Nothing in the last {since}.")
+        return
+    for session in sessions:
+        console.print(_session_line(session))
+        for event in ledger.file_events_for_session(session["id"]):
+            console.print(f"  {event['op']} [magenta]{event['path']}[/]")
+        for c in ledger.commits_for_session(session["id"]):
+            console.print(f"  commit {c['sha'][:8]} {c['subject'] or ''}")
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def where(path: str, db: str = DB_OPT) -> None:
+    """Every session and agent that touched a file."""
+    ledger = _ledger(db)
+    touches = ledger.file_events_for_path(path)
+    if not touches:
+        console.print(f"No recorded activity on [magenta]{path}[/].")
+        return
+    table = Table()
+    for col in ("when", "agent", "project", "op", "tool"):
+        table.add_column(col)
+    for t in touches:
+        table.add_row(
+            time.strftime("%Y-%m-%d %H:%M", time.localtime(t["at"])),
+            t["agent"], t["project_scope"], t["op"], t["tool"] or "-",
+        )
+    console.print(table)
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def pending(
+    project: str = typer.Option("", help="Limit to one project by name"),
+    db: str = DB_OPT,
+) -> None:
+    """Open loops — things mentioned but not yet done. Cross-project."""
+    # Open-loop capture and closure is a later task; today this reports the
+    # empty state honestly rather than nothing at all.
+    console.print(f"No open loops tracked yet{f' for {project}' if project else ''}.")
+
+
+def _match_project(ledger, name: str) -> str | None:
+    matches = sorted(s for s in ledger.known_scopes() if name.lower() in s.lower())
+    return matches[0] if matches else None
+
+
+@app.command("project", rich_help_panel=ACTIVITY)
+def project_cmd(name: str, db: str = DB_OPT) -> None:
+    """One repo: recent work, files touched, commits, pending."""
+    ledger = _ledger(db)
+    scope = _match_project(ledger, name)
+    if scope is None:
+        console.print(f"No activity found for project [magenta]{name}[/].")
+        return
+
+    console.print(f"[cyan]{scope}[/]")
+    for session in ledger.sessions_for_scope(scope, limit=10):
+        console.print(f"  session by {session['agent']} — {session['git_branch'] or '?'}")
+    for event in ledger.file_events_for_scope(scope, limit=20):
+        console.print(f"  {event['op']} [magenta]{event['path']}[/]")
+    for c in ledger.commits_for_scope(scope, limit=10):
+        console.print(f"  commit {c['sha'][:8]} {c['subject'] or ''}")
 
 
 @app.command(rich_help_panel=UPKEEP, hidden=True)
