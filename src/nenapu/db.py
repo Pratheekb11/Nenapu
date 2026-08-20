@@ -209,6 +209,46 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- The work-activity ledger: where you did what, which agent, in which repo.
+-- Deterministic — filled from git and transcript tool calls, never a model.
+CREATE TABLE IF NOT EXISTS sessions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent             TEXT NOT NULL,
+    project_scope     TEXT NOT NULL,
+    cwd               TEXT,
+    git_branch        TEXT,
+    git_head_before   TEXT,
+    git_head_after    TEXT,
+    started_at        REAL NOT NULL,
+    ended_at          REAL,
+    summary           TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_scope ON sessions(project_scope, started_at);
+
+CREATE TABLE IF NOT EXISTS file_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    path       TEXT NOT NULL,
+    op         TEXT NOT NULL,  -- created | edited | deleted | read
+    tool       TEXT,
+    at         REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_events_session ON file_events(session_id);
+CREATE INDEX IF NOT EXISTS idx_file_events_path    ON file_events(path);
+
+CREATE TABLE IF NOT EXISTS commits (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    INTEGER,
+    sha           TEXT NOT NULL,
+    subject       TEXT,
+    files_changed TEXT NOT NULL DEFAULT '[]',
+    at            REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_commits_session ON commits(session_id);
 """
 
 
