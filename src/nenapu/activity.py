@@ -30,12 +30,14 @@ class ActivityLedger:
         git_branch: str | None = None,
         git_head_before: str | None = None,
         started_at: float | None = None,
+        external_id: str | None = None,
     ) -> int:
         with transaction(self.conn):
             cur = self.conn.execute(
                 "INSERT INTO sessions(agent, project_scope, cwd, git_branch,"
-                " git_head_before, started_at) VALUES (?,?,?,?,?,?)",
-                (agent, project_scope, cwd, git_branch, git_head_before, started_at or now()),
+                " git_head_before, started_at, external_id) VALUES (?,?,?,?,?,?,?)",
+                (agent, project_scope, cwd, git_branch, git_head_before, started_at or now(),
+                 external_id),
             )
             commit(self.conn)
             return cur.lastrowid
@@ -56,9 +58,17 @@ class ActivityLedger:
             )
             commit(self.conn)
 
-    def get_session(self, session_id: int) -> dict | None:
+    def get_session(self, session_id: int | str) -> dict | None:
+        """Looks up by the internal row id or by `external_id` — a transcript's
+        own session id, which backfill uses to detect a session already
+        ingested without keeping a separate index of processed files."""
+        try:
+            id_val = int(session_id)
+        except (TypeError, ValueError):
+            id_val = None
         row = self.conn.execute(
-            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+            "SELECT * FROM sessions WHERE id = ? OR external_id = ?",
+            (id_val, str(session_id)),
         ).fetchone()
         return dict(row) if row else None
 
@@ -88,9 +98,12 @@ class ActivityLedger:
             commit(self.conn)
             return cur.lastrowid
 
-    def file_events_for_session(self, session_id: int) -> list[dict]:
+    def file_events_for_session(self, session_id: int | str) -> list[dict]:
+        session = self.get_session(session_id)
+        if session is None:
+            return []
         rows = self.conn.execute(
-            "SELECT * FROM file_events WHERE session_id = ? ORDER BY at", (session_id,)
+            "SELECT * FROM file_events WHERE session_id = ? ORDER BY at", (session["id"],)
         )
         return [dict(r) for r in rows]
 
@@ -123,9 +136,12 @@ class ActivityLedger:
             commit(self.conn)
             return cur.lastrowid
 
-    def commits_for_session(self, session_id: int) -> list[dict]:
+    def commits_for_session(self, session_id: int | str) -> list[dict]:
+        session = self.get_session(session_id)
+        if session is None:
+            return []
         rows = self.conn.execute(
-            "SELECT * FROM commits WHERE session_id = ? ORDER BY at", (session_id,)
+            "SELECT * FROM commits WHERE session_id = ? ORDER BY at", (session["id"],)
         )
         return [_commit_row(r) for r in rows]
 

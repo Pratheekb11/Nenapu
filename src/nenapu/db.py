@@ -222,10 +222,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     git_head_after    TEXT,
     started_at        REAL NOT NULL,
     ended_at          REAL,
-    summary           TEXT
+    summary           TEXT,
+    external_id       TEXT  -- the transcript's own session id, for backfill idempotency
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_scope ON sessions(project_scope, started_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_external ON sessions(external_id);
 
 CREATE TABLE IF NOT EXISTS file_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
