@@ -132,6 +132,33 @@ def test_looking_around_gets_the_full_panel(tmp_path):
     assert "facts" in result.stdout
 
 
+def test_the_stop_hook_command_does_not_leak_the_banner(tmp_path):
+    """Requirement (Task 0b, priority-ordered task list): `learn` must be in
+    the quiet-suppression tuple alongside its hidden alias `observe`.
+
+    `cli.py:146` suppresses the version stamp for machine-invoked commands by
+    name: `("version", "recall-hook", "observe")`. Nine commands were renamed
+    to plain words (commit `8a33995`) and the Stop hook now runs `nenapu learn
+    --stdin --detach`, not `nenapu observe --stdin --detach` — but the
+    suppression tuple was never updated to match. The old alias still works
+    (it stays hidden, see test_command_names.py), which is exactly what let
+    this drift ship unnoticed: every session ending would print the version
+    stamp to stderr, exactly the "hook error in chat" symptom the P0 bug
+    report describes, just from a different cause.
+    """
+    result = _run(["learn", "--stdin"], tmp_path, NENAPU_NO_BANNER="")
+    assert STAMP not in result.stderr, (
+        "the Stop hook now leaks the version stamp on every session end"
+    )
+
+
+def test_the_old_alias_still_suppresses_the_banner(tmp_path):
+    """Locks in the half of the tuple that already works, so a future edit
+    cannot fix `learn` by accidentally dropping `observe`."""
+    result = _run(["observe", "--stdin"], tmp_path, NENAPU_NO_BANNER="")
+    assert STAMP not in result.stderr
+
+
 def test_the_panel_reports_the_store(tmp_path):
     _run(["write", "a remembered thing"], tmp_path, NENAPU_NO_BANNER="1")
     result = _run(["version"], tmp_path, NENAPU_NO_BANNER="")

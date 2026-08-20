@@ -181,6 +181,32 @@ def test_a_stale_hook_from_an_earlier_version_is_replaced(tmp_path):
     assert not any("timeout" in json.dumps(e) and '"timeout": 60' in json.dumps(e) for e in stop)
 
 
+def test_the_real_pre_rename_hook_is_upgraded(tmp_path):
+    """Requirement (Task 0c, priority-ordered task list): re-running `nenapu
+    init` must repair the exact stale hook this machine's own
+    `~/.claude/settings.json` carries today.
+
+    The command word was `observe` before commit `8a33995` renamed it to
+    `learn`; `install_hooks` never rewrote already-installed hooks on
+    upgrade, so this literal string is what is currently sitting on disk:
+    `nenapu observe --stdin --detach`. This test pins that the upgrade path
+    actually replaces it once the install is repaired (Task 0) and this is
+    re-run (Task 0c) — not a hypothetical, a fixture of a real file.
+    """
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"hooks": {"Stop": [
+        {"hooks": [{"type": "command", "command": "nenapu observe --stdin --detach",
+                    "timeout": 10}]},
+    ]}}))
+
+    ok, detail = install_hooks(path)
+
+    assert ok and "replaced" in detail
+    stop = json.loads(path.read_text())["hooks"]["Stop"]
+    assert stop == hook_config()["Stop"]
+    assert "observe" not in json.dumps(stop)
+
+
 def test_replacing_ours_leaves_someone_elses_hook_on_the_same_event(tmp_path):
     path = tmp_path / "settings.json"
     theirs = {"hooks": [{"type": "command", "command": "make lint"}]}
