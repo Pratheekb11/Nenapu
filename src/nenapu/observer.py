@@ -282,11 +282,20 @@ def observe_transcript(
     return written
 
 
-def recall_context(store: Store, *, scope: str | None = None, limit: int = MAX_INJECTED) -> str:
+def recall_context(
+    store: Store, *, scope: str | None = None, limit: int = MAX_INJECTED,
+    session_id: str | None = None,
+) -> str:
     """What the agent should know before it starts, as plain text.
 
     Emitted into the session's context rather than returned from a tool: the
     agent reads it whether or not it would have thought to ask.
+
+    Without `session_id` this was a plain SELECT — no recall logged, no
+    `use_count` bumped — which is why the outcome ledger and the
+    falsification cascade had nothing to work with under real hook-only use.
+    Passing it logs the injected set as recalls with an empty query, since a
+    session-start injection has no query for BM25 to have been involved in.
     """
     # Suspect facts are included on purpose. They are exactly the ones an agent
     # would otherwise use without knowing their foundation collapsed, and
@@ -315,6 +324,11 @@ def recall_context(store: Store, *, scope: str | None = None, limit: int = MAX_I
     sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK, -pair[0].occurrences, -pair[1]))
     suspect.sort(key=lambda pair: -pair[1])
     chosen = sound[:limit] + suspect[:MAX_SUSPECT_INJECTED]
+
+    if session_id:
+        hits = [(fact, score, {}) for fact, score in chosen]
+        store.ledger.log_many(hits, session_id=session_id, query="")
+        store.mark_used([fact.id for fact, _ in chosen])
 
     lines = ["# Memory (nenapu)", ""]
     kept = [f for f, _ in chosen if f.status != Status.SUSPECT]

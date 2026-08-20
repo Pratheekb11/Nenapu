@@ -1038,14 +1038,16 @@ def recall_hook(db: str = DB_OPT) -> None:
     Prints to stdout, which the hook feeds into the model's context — so the
     agent reads it without having to ask for it.
     """
-    from .observer import recall_context
+    from .observer import hook_payload, recall_context
 
     try:
+        payload = hook_payload(sys.stdin.read()) if not sys.stdin.isatty() else {}
+        session_id = payload.get("session_id")
         # Deliberately not `_stores`: that fires the one-time greeting, and a
         # hook running before the user has typed anything would spend it on
         # nobody.
         store, _ = open_store(db or os.environ.get("NENAPU_DB"))
-        text = recall_context(store)
+        text = recall_context(store, session_id=session_id)
     except Exception:  # noqa: BLE001 — a hook must never break the session
         raise typer.Exit(0)
     if text:
