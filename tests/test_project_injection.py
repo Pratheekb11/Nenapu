@@ -499,7 +499,6 @@ def recall(store, **kwargs):
 # `observer._token_estimate(text)` the budget is counted in.
 # ==========================================================================
 
-r4 = pytest.mark.xfail(strict=True, reason="R4 not implemented yet: remove when it lands")
 
 
 def _fact_lines(block):
@@ -633,7 +632,6 @@ def _touched(ledger, paths, *, scope=SCOPE, ago=DAY):
                              subject=None)
 
 
-@r4
 def test_two_sessions_in_one_repo_with_different_recent_files_differ(store, ledger):
     """The mechanical reason the block reads as a dump: it is identical for
     every session in a repo until the store itself changes."""
@@ -650,7 +648,6 @@ def test_two_sessions_in_one_repo_with_different_recent_files_differ(store, ledg
     assert on_bookings and on_bookings != on_invoices
 
 
-@r4
 def test_a_fact_about_a_recently_edited_file_leads_the_others(store, ledger):
     store.write(Fact(text="the invoices module rounds to two decimals",
                      scope=SCOPE, kind=Kind.PROJECT, confidence=0.95))
@@ -663,7 +660,6 @@ def test_a_fact_about_a_recently_edited_file_leads_the_others(store, ledger):
     assert block.index("bookings module") < block.index("invoices module")
 
 
-@r4
 def test_the_branch_is_part_of_the_anchor(store, ledger):
     """`sessions.git_branch` is already recorded and already unused. Work on
     `release-3` is different work from work on `main`."""

@@ -912,6 +912,59 @@ def _changed_section(ledger, scope: str, cwd: str | None) -> list[str]:
     return lines
 
 
+# ---------- R4 · anchored on the work at hand ----------
+#
+# The block was sorted by `(kind != FEEDBACK, -occurrences, -confidence)` and
+# nothing else, so it was identical for every session in a repo until the
+# store itself changed. That is the mechanical reason it read as a dump, and
+# the gate measured 84% of it unused.
+#
+# The anchor costs no model call and no new state: the activity ledger already
+# records which files the last sessions touched and which branch they were on.
+# A fact that names one of them is about the work at hand.
+
+# How many recent file events the anchor is read from. Enough to cover a
+# session or two of work, few enough that last month's refactor does not
+# still be steering today's block.
+ANCHOR_FILE_EVENTS = 20
+
+# Basenames only, never directory segments: `app`, `src` and `backend` appear
+# in half the paths in a repo and would match half the facts in the store,
+# which is a flatter signal than no signal at all.
+MIN_ANCHOR_TERM = 3
+
+
+def _anchor_terms(conn, scope: str | None, cwd: str | None) -> set[str]:
+    """What this session is working on, in the words a fact might use."""
+    if not scope:
+        return set()
+    from .activity import ActivityLedger
+
+    ledger = ActivityLedger(conn)
+    terms: set[str] = set()
+    for event in ledger.file_events_for_scope(scope, limit=ANCHOR_FILE_EVENTS):
+        name = event["path"].rsplit("/", 1)[-1]
+        stem = name.rsplit(".", 1)[0]
+        terms.update(t for t in (name, stem) if len(t) >= MIN_ANCHOR_TERM)
+    for session in ledger.sessions_for_scope(scope, limit=1):
+        branch = session["git_branch"]
+        if branch and len(branch) >= MIN_ANCHOR_TERM:
+            terms.add(branch)
+    if cwd:
+        here = Path(cwd).name
+        if len(here) >= MIN_ANCHOR_TERM:
+            terms.add(here)
+    return {t.lower() for t in terms}
+
+
+def _anchor_score(fact: Fact, terms: set[str]) -> int:
+    """How much of the work at hand this fact names."""
+    if not terms:
+        return 0
+    haystack = f"{fact.text} {fact.key or ''}".lower()
+    return sum(1 for term in terms if term in haystack)
+
+
 # ---------- R2 · diversity at selection ----------
 #
 # Selection was top-N by score with no diversity check, and the store holds 46
@@ -1100,8 +1153,14 @@ def recall_context(
     # correction repeated five times is worth the budget more than one said
     # once at the same confidence, and confidence alone cannot tell them
     # apart when both were just asserted.
-    sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK, -pair[0].occurrences, -pair[1]))
-    suspect.sort(key=lambda pair: -pair[1])
+    # Anchoring reorders what follows the corrections; it does not demote
+    # them. A correction the user has repeated is still the most actionable
+    # line in the block whatever files were edited yesterday.
+    anchor = _anchor_terms(store.conn, scope, cwd)
+    sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK,
+                                 -_anchor_score(pair[0], anchor),
+                                 -pair[0].occurrences, -pair[1]))
+    suspect.sort(key=lambda pair: (-_anchor_score(pair[0], anchor), -pair[1]))
     # `limit` is still honoured when a caller sets one, but nothing sets one by
     # default any more: the token budget is what decides how much of the store
     # a session is handed.
