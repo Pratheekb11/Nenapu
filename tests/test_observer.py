@@ -647,7 +647,6 @@ def test_the_log_does_not_grow_without_end(tmp_path):
 # under its own feet.
 # ==========================================================================
 
-r2 = pytest.mark.xfail(strict=True, reason="R2 not implemented yet: remove when it lands")
 
 
 def _lines(block):
@@ -677,7 +676,6 @@ def _fill(store, n, *, prefix="a distinct claim about subject"):
             for i in range(n)]
 
 
-@r2
 def test_twelve_facts_sharing_one_key_take_one_slot(store):
     """One key is one subject with one value. Twelve phrasings of it are
     twelve slots spent on one claim."""
@@ -689,7 +687,6 @@ def test_twelve_facts_sharing_one_key_take_one_slot(store):
     assert sum(1 for line in _lines(block) if "the deploy command is described" in line) == 1
 
 
-@r2
 def test_the_slots_freed_go_to_other_claims(store):
     """Diversity is not a smaller block, it is a block that says more. If the
     twelve restatements simply vanish and nothing takes their place, the
@@ -719,7 +716,6 @@ def test_a_superseded_chain_contributes_one_claim(store):
     assert store.get(old.id).status == Status.SUPERSEDED
 
 
-@r2
 def test_near_identical_wording_collapses_to_one_slot(store):
     """No embeddings available, so token overlap is the signal. Two rows that
     differ by an article are one claim however they were written."""

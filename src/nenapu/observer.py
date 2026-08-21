@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Callable
 
 from .db import commit, transaction
+from .distill import _similarity
 from .llm import Backend, LLMUnavailable, detect_backend, structured
 from .models import (
     EntityEdgeKind,
@@ -911,6 +912,54 @@ def _changed_section(ledger, scope: str, cwd: str | None) -> list[str]:
     return lines
 
 
+# ---------- R2 · diversity at selection ----------
+#
+# Selection was top-N by score with no diversity check, and the store holds 46
+# superseded rows and many near-identical actives, so twelve slots could carry
+# three distinct claims. `distill.dedupe` runs at write time and per scope,
+# which is a different moment doing a different job: what reaches here is the
+# residue that survived it.
+#
+# The false-positive cost is what shapes the rule. Merging two facts that only
+# look alike silently hides one, and the block is the one surface where a
+# hidden fact is never noticed. So a restatement has to be evidence, not a
+# guess: the store saying outright that two rows are one subject (a shared
+# key), or wording so close that the difference is filler. Anything that reads
+# as a disagreement — two different numbers, most of all — is two claims and
+# stays two claims.
+
+REDUNDANCY_THRESHOLD = 0.85
+
+
+def _restates(fact: Fact, other: Fact) -> bool:
+    """Is `fact` the same claim as `other`, said again?"""
+    from .store import looks_contradictory
+
+    if fact.key and fact.key == other.key:
+        return True  # one key is one subject with one value, by construction
+    # A disagreement is not a restatement. Asked here of facts that share no
+    # key, where a numeric mismatch is the clearest evidence there is that two
+    # sentences are about two different values.
+    if looks_contradictory(fact.text, other.text)[0]:
+        return False
+    return _similarity(fact.text, other.text) >= REDUNDANCY_THRESHOLD
+
+
+def _distinct(facts: list[Fact]) -> list[Fact]:
+    """Drop restatements of claims already chosen, keeping order.
+
+    Order is the priority order the caller sorted into, so the survivor of a
+    pair is the one that earned its slot — a correction outranks the project
+    fact that repeats it.
+    """
+    kept: list[Fact] = []
+    for fact in facts:
+        if any(_restates(fact, chosen) for chosen in kept):
+            continue
+        kept.append(fact)
+    return kept
+
+
 class _Section:
     """One block of the injection: a heading, its lines, and the facts behind
     them, so that what is logged as recalled is what actually got printed."""
@@ -1059,8 +1108,13 @@ def recall_context(
     if limit is not None:
         sound = sound[:limit]
 
-    corrections = [f for f, _ in sound if f.kind == Kind.FEEDBACK]
-    others = [f for f, _ in sound if f.kind != Kind.FEEDBACK]
+    # Diversity applies to what is believed, never to the warnings: a suspect
+    # fact is listed precisely because an agent would otherwise act on it
+    # without knowing its foundation collapsed, which is the same reason the
+    # confidence floor does not apply to it either.
+    chosen = _distinct([fact for fact, _ in sound])
+    corrections = [f for f in chosen if f.kind == Kind.FEEDBACK]
+    others = [f for f in chosen if f.kind != Kind.FEEDBACK]
     doubted = [f for f, _ in suspect[:MAX_SUSPECT_INJECTED]]
 
     if corrections:
