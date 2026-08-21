@@ -37,7 +37,7 @@ from typing import Callable
 
 from .db import commit, transaction
 from .llm import Backend, LLMUnavailable, detect_backend, structured
-from .models import Fact, Kind, Origin, Status, now
+from .models import Fact, Kind, Origin, Outcome, Status, now
 from .store import Store, effective_confidence, scope_for
 
 # Keep the injected block small. It is prepended to every session, so it is
@@ -96,6 +96,22 @@ EXTRACT_SCHEMA = {
                 "additionalProperties": False,
             },
         },
+        # G4: grading rides this call rather than a second one. The same read
+        # of the same transcript answers "what did this session teach" and
+        # "what did this session do with what it was given".
+        "grades": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "fact_id": {"type": "integer"},
+                    "verdict": {"type": "string", "enum": ["used", "misled", "unused"]},
+                    "where": {"type": "string"},
+                },
+                "required": ["fact_id", "verdict", "where"],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": ["facts"],
     "additionalProperties": False,
@@ -131,7 +147,18 @@ Only use an id you were actually shown. Never invent one.
 Also record open loops: things the session said should happen and did not.
 Only what was left undone, never what was completed. Give a path glob in
 resolution_hint when the session named where the work would go, otherwise an
-empty string."""
+empty string.
+
+You may also be shown the facts that were injected into this session before it
+started, each line starting with its id. Grade each one:
+- verdict "used" only when the transcript shows the session relying on it, and
+  quote or name that moment in `where`
+- verdict "misled" when the session showed the fact to be wrong or out of date
+- verdict "unused" for everything else, and leave `where` empty
+
+Default to "unused". Most injected facts are never referred to, and a fact
+being true, or looking familiar, is not evidence that this session used it.
+Only grade ids you were shown."""
 
 
 # ---------- redaction ----------
@@ -423,6 +450,76 @@ def _proposed_id(item: dict) -> int | None:
         return None
 
 
+# ---------- G4 · grading what the session was given ----------
+#
+# The set to grade is what was actually injected, read from the ledger. It is
+# not `relevant_memory`, which is a fresh search over the transcript and finds
+# a different set: grading that would grade facts the session never saw.
+#
+# Self-confirmation is the risk worth naming. The extractor writes facts and
+# now grades them, so the block below carries the id and the claim and nothing
+# else. No confidence, no origin, no usage count: a grader shown how strongly
+# a fact is believed can defend one it recognises, and `used` is the verdict
+# that moves confidence upward.
+
+GRADE_VERDICTS = {
+    "used": Outcome.GOOD,
+    "misled": Outcome.BAD,
+    "unused": Outcome.NEUTRAL,
+}
+
+
+def _injected_block(recalls: list) -> str:
+    """The facts this session was handed, with the ids a grade points at."""
+    lines = [f"[{r.fact_id}] {r.fact_text}" for r in recalls if r.fact_text]
+    if not lines:
+        return ""
+    header = ["## Injected into this session (grade each id)", ""]
+    return "\n".join(header + lines) + "\n\n"
+
+
+def _graded_fact_id(item: dict, allowed: set[int]) -> int | None:
+    """An id the model was not shown is not an id, mirroring `_proposed_id`.
+
+    Real ids are guessable, so a model that invents one must not be able to
+    grade a fact this session never surfaced, or a fact in someone else's
+    session.
+    """
+    try:
+        fact_id = int(item.get("fact_id"))
+    except (TypeError, ValueError):
+        return None
+    return fact_id if fact_id in allowed else None
+
+
+def _grades_from(
+    store: Store, result: dict, recalls: list, *, source: str = "observer",
+) -> int:
+    """Apply the extractor's verdicts to the recalls it was shown.
+
+    Returns how many recalls were graded. `Ledger.grade` is reused rather than
+    re-implemented, so first-grade-wins still holds and a human verdict is
+    never overwritten by the model's.
+    """
+    by_fact: dict[int, list] = {}
+    for recall in recalls:
+        by_fact.setdefault(recall.fact_id, []).append(recall)
+
+    graded = 0
+    for item in result.get("grades") or []:
+        if not isinstance(item, dict):
+            continue
+        fact_id = _graded_fact_id(item, set(by_fact))
+        outcome = GRADE_VERDICTS.get(str(item.get("verdict") or "").strip().lower())
+        if fact_id is None or outcome is None:
+            continue  # a malformed grade is dropped, never fatal to the hook
+        note = (item.get("where") or "").strip() or None
+        for recall in by_fact[fact_id]:
+            if store.ledger.grade(recall.id, outcome, source=source, note=note):
+                graded += 1
+    return graded
+
+
 def observe_transcript(
     store: Store,
     transcript: Path,
@@ -433,6 +530,7 @@ def observe_transcript(
     backend: Backend | None = None,
     apply: bool = True,
     parse: Callable[[list[str]], list[str]] | None = None,
+    grade_source: str = "observer",
 ) -> list[Fact]:
     """Extract what a finished session taught, and store it.
 
@@ -448,10 +546,15 @@ def observe_transcript(
 
     known = relevant_memory(store, conversation, scope=scope)
     shown_ids = {fact.id for fact in known}
+    # Read before the call, so the block and the grades that come back are the
+    # same set. Without a session id there is no injected set to grade, and
+    # grading by fact id alone would reach across every session in the store.
+    injected = store.ledger.pending(session_id=session_id) if session_id else []
 
     backend = backend or detect_backend()
     result = structured(
-        f"{_known_memory_block(known)}## Session transcript\n\n{conversation}\n\n"
+        f"{_known_memory_block(known)}{_injected_block(injected)}"
+        f"## Session transcript\n\n{conversation}\n\n"
         "Record what should be remembered. Return an empty list if nothing "
         "durable was established.",
         EXTRACT_SCHEMA,
@@ -512,6 +615,7 @@ def observe_transcript(
     if apply:
         _open_loops_from(store, result.get("open_loops") or [], scope=scope,
                          session_id=session_id)
+        _grades_from(store, result, injected, source=grade_source)
     return written
 
 

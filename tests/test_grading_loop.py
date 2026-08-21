@@ -70,7 +70,6 @@ from nenapu.llm import LLMUnavailable
 from nenapu.models import Fact, Outcome
 from nenapu.store import Store
 
-g4 = pytest.mark.xfail(strict=True, reason="G4 not implemented yet: remove when it lands")
 g5 = pytest.mark.xfail(strict=True, reason="G5 not implemented yet: remove when it lands")
 g6 = pytest.mark.xfail(strict=True, reason="G6 not implemented yet: remove when it lands")
 
@@ -146,7 +145,6 @@ def _outcomes(store, session_id="s-1"):
 # ==========================================================================
 
 
-@g4
 def test_the_schema_asks_the_extractor_to_grade_what_it_was_shown():
     from nenapu.observer import EXTRACT_SCHEMA
 
@@ -176,7 +174,6 @@ def test_grading_does_not_become_a_second_model_call(store, tmp_path, monkeypatc
     assert len(prompts) == 1
 
 
-@g4
 def test_the_prompt_biases_toward_unused_and_asks_where(store):
     """`used` is the verdict that moves confidence upward, so it is the one
     that has to be paid for with evidence from the transcript."""
@@ -188,7 +185,6 @@ def test_the_prompt_biases_toward_unused_and_asks_where(store):
     assert "used" in system and "where" in system
 
 
-@g4
 def test_a_fact_the_session_relied_on_is_graded_good(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 
@@ -204,7 +200,6 @@ def test_a_fact_the_session_relied_on_is_graded_good(store, tmp_path, monkeypatc
     assert _outcomes(store) == [(Outcome.GOOD, "observer")]
 
 
-@g4
 def test_a_fact_the_session_contradicted_is_graded_bad(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 
@@ -220,7 +215,6 @@ def test_a_fact_the_session_contradicted_is_graded_bad(store, tmp_path, monkeypa
     assert _outcomes(store) == [(Outcome.BAD, "observer")]
 
 
-@g4
 def test_a_fact_named_as_unused_is_graded_neutral(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 
@@ -235,7 +229,6 @@ def test_a_fact_named_as_unused_is_graded_neutral(store, tmp_path, monkeypatch):
     assert _outcomes(store) == [(Outcome.NEUTRAL, "observer")]
 
 
-@g4
 def test_a_bad_grade_costs_the_fact_confidence(store, tmp_path, monkeypatch):
     """The loop closing: a graded recall has to reach `outcome_signal`, or the
     grader is a report rather than feedback."""
@@ -258,7 +251,6 @@ def test_a_bad_grade_costs_the_fact_confidence(store, tmp_path, monkeypatch):
     assert effective_confidence(store.get(fact.id)) < effective_confidence(store.get(twin.id))
 
 
-@g4
 def test_an_id_never_injected_into_this_session_is_ignored(store, tmp_path, monkeypatch):
     """Mirrors the `_proposed_id` guard: real ids are guessable, and a model
     that invents one must not be able to grade a fact it never saw."""
@@ -296,7 +288,6 @@ def test_a_malformed_grade_is_dropped_rather_than_fatal(store, tmp_path, monkeyp
     assert _outcomes(store) == [(Outcome.PENDING, None)]
 
 
-@g4
 def test_the_injected_block_is_read_from_the_ledger(store):
     """`relevant_memory` is a fresh FTS search over the transcript, which is a
     different set from what was actually injected. Grading the wrong set would
@@ -314,14 +305,12 @@ def test_the_injected_block_is_read_from_the_ledger(store):
         assert fact.text in block
 
 
-@g4
 def test_an_empty_injection_renders_nothing(store):
     from nenapu.observer import _injected_block
 
     assert _injected_block([]) == ""
 
 
-@g4
 def test_the_extraction_prompt_shows_what_was_injected(store, tmp_path, monkeypatch):
     """End of the same thread: the block has to reach the prompt, and it has
     to carry the facts the session was given rather than the ones a search
@@ -339,7 +328,6 @@ def test_the_extraction_prompt_shows_what_was_injected(store, tmp_path, monkeypa
     assert str(injected.id) in prompts[0]
 
 
-@g4
 def test_the_grader_is_not_shown_confidence_or_provenance(store, tmp_path, monkeypatch):
     """Self-confirmation risk: the extractor writes facts and now grades them.
     `used` needs transcript evidence, and the grader is never shown a fact's
@@ -432,7 +420,6 @@ def test_a_human_grade_is_not_overwritten_by_the_grader(store, tmp_path, monkeyp
     assert _outcomes(store) == [(Outcome.BAD, "human")]
 
 
-@g4
 def test_grades_are_applied_by_the_helper_the_plan_names(store):
     """`_grades_from` is the seam the replay path reuses, so it is tested on
     its own rather than only through the hook."""
@@ -675,7 +662,6 @@ def test_since_bounds_which_sessions_are_picked_up(store, tmp_path):
     assert queued == ["s-recent"]
 
 
-@g6
 def test_a_replayed_grade_is_distinguishable_from_a_live_one(store, tmp_path, monkeypatch):
     """`observer-replay` is to `observer` what `expiry` already is to a real
     grade: an audit has to be able to tell backfilled evidence from evidence

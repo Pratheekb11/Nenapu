@@ -219,6 +219,10 @@ class Recall:
     note: str | None = None
     id: int | None = None
     created_at: float = field(default_factory=now)
+    # Filled by queries that join the fact back in. A recall names a fact by
+    # id, and a caller that has to look every one of them up cannot render a
+    # list of them without a query per row.
+    fact_text: str = ""
 
 
 @dataclass

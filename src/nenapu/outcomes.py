@@ -183,12 +183,19 @@ class Ledger:
         return row_to_recall(row) if row else None
 
     def pending(self, session_id: str | None = None, limit: int = 50) -> list[Recall]:
-        sql = "SELECT * FROM recalls WHERE outcome = ?"
+        # The fact text is joined in rather than looked up per row: every
+        # caller that renders pending recalls needs it, and a left join keeps
+        # a recall whose fact has since been purged visible instead of losing
+        # it silently.
+        sql = (
+            "SELECT r.*, COALESCE(f.text, '') AS fact_text FROM recalls r"
+            " LEFT JOIN facts f ON f.id = r.fact_id WHERE r.outcome = ?"
+        )
         args: list = [Outcome.PENDING]
         if session_id:
-            sql += " AND session_id = ?"
+            sql += " AND r.session_id = ?"
             args.append(session_id)
-        sql += " ORDER BY created_at DESC LIMIT ?"
+        sql += " ORDER BY r.created_at DESC LIMIT ?"
         args.append(limit)
         return [row_to_recall(r) for r in self.conn.execute(sql, args)]
 
