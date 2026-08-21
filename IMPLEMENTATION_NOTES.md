@@ -451,6 +451,22 @@ surface (operator jobs live in the CLI, never registered as tools), lean recall
 results that omit predictable fields, and a test asserting the surface stays
 under budget.
 
+The extraction call is the other place tokens are spent, once per session, and
+it now carries four outputs instead of two. Measured at 4 chars/token:
+
+| part of the extraction prompt | tokens |
+|---|---|
+| schema, whole | 336 (grades 67, entities 80) |
+| system prompt | 605 |
+| injected block, at its cap of 17 recalls | 318 |
+| known entities block, at its cap of 15 | 125 |
+
+So grading and entity extraction together add roughly 590 tokens to a call
+that already sends a whole session's conversation, and they buy the recall
+ledger its evidence without a second model call. Both blocks are capped by
+count rather than by length, which is the same unit R3 replaces in the
+injection path.
+
 ## The pet: five versions, and the one lesson worth keeping
 
 Four were hand-drawn and every one looked homemade: three braille bitmaps

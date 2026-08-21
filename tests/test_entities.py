@@ -74,7 +74,6 @@ e1 = pytest.mark.xfail(strict=True, reason="E1 not implemented yet: remove when 
 e2 = pytest.mark.xfail(strict=True, reason="E2 not implemented yet: remove when it lands")
 e3 = pytest.mark.xfail(strict=True, reason="E3 not implemented yet: remove when it lands")
 e4 = pytest.mark.xfail(strict=True, reason="E4 not implemented yet: remove when it lands")
-e8 = pytest.mark.xfail(strict=True, reason="E8 not implemented yet: remove when it lands")
 e9 = pytest.mark.xfail(strict=True, reason="E9 not implemented yet: remove when it lands")
 
 DAY = 86400.0
@@ -993,7 +992,6 @@ def _patch_structured(monkeypatch, payload):
     return calls
 
 
-@e8
 def test_the_schema_asks_for_entities():
     """For the entities a filesystem cannot see: services, people, concepts."""
     from nenapu.observer import EXTRACT_SCHEMA
@@ -1005,7 +1003,6 @@ def test_the_schema_asks_for_entities():
     assert "target" in item["properties"]
 
 
-@e8
 def test_an_extracted_entity_is_written(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 
@@ -1020,7 +1017,6 @@ def test_an_extracted_entity_is_written(store, tmp_path, monkeypatch):
     assert "auth service" in names
 
 
-@e8
 def test_a_target_the_model_was_not_shown_is_dropped(store, tmp_path, monkeypatch):
     """Mirrors `_proposed_id`: real ids are guessable, and the 1.5b model in
     the calibration table invented nine of them for four facts."""
@@ -1070,7 +1066,6 @@ def test_entities_ride_the_same_single_call(store, tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-@e8
 def test_an_extracted_entity_lands_in_the_sessions_scope(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 
@@ -1086,7 +1081,6 @@ def test_an_extracted_entity_lands_in_the_sessions_scope(store, tmp_path, monkey
     assert row["scope"] == SCOPE
 
 
-@e8
 def test_a_dry_run_writes_no_entities(store, tmp_path, monkeypatch):
     from nenapu.observer import observe_transcript
 

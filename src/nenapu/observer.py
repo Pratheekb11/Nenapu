@@ -37,7 +37,17 @@ from typing import Callable
 
 from .db import commit, transaction
 from .llm import Backend, LLMUnavailable, detect_backend, structured
-from .models import Fact, Kind, Origin, Outcome, Status, now
+from .models import (
+    EntityEdgeKind,
+    EntityKind,
+    EntityStatus,
+    Fact,
+    Kind,
+    Origin,
+    Outcome,
+    Status,
+    now,
+)
 from .store import Store, effective_confidence, scope_for
 
 # Keep the injected block small. It is prepended to every session, so it is
@@ -93,6 +103,24 @@ EXTRACT_SCHEMA = {
                     "resolution_hint": {"type": "string"},
                 },
                 "required": ["text", "resolution_hint"],
+                "additionalProperties": False,
+            },
+        },
+        # E8: the entities a filesystem cannot see. Files, dirs and commits
+        # are built deterministically from the activity ledger and are not
+        # something a model should be inventing; services, people and
+        # concepts have no other source.
+        "entities": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["service", "person", "concept"]},
+                    "relation": {"type": "string", "enum": ["", "calls", "runs", "owns"]},
+                    "target": {"type": "integer"},
+                },
+                "required": ["name", "kind"],
                 "additionalProperties": False,
             },
         },
@@ -158,7 +186,14 @@ started, each line starting with its id. Grade each one:
 
 Default to "unused". Most injected facts are never referred to, and a fact
 being true, or looking familiar, is not evidence that this session used it.
-Only grade ids you were shown."""
+Only grade ids you were shown.
+
+Finally, record the things the session was about that a filesystem cannot
+see: services, people, concepts. Files, directories and commits are already
+known and must not be listed. When the session said one of them relates to
+something in the list of known things you were shown, give its id as target
+and say how in relation. Only use an id you were shown, and leave target out
+otherwise."""
 
 
 # ---------- redaction ----------
@@ -499,6 +534,84 @@ def _graded_fact_id(item: dict, allowed: set[int]) -> int | None:
 UNUSED_GRADE_SOURCE = "observer-unused"
 
 
+# ---------- E8 · the entities a filesystem cannot see ----------
+
+# What the extractor is shown of the entity graph. Same reasoning as
+# `RELEVANT_MEMORY_LIMIT`: a fixed budget on a call that already runs at
+# thousands of tokens, rather than something that grows with the store.
+KNOWN_ENTITY_LIMIT = 15
+
+# Kinds a model may propose. Files, dirs, repos and commits are built from the
+# activity ledger, which sees them exactly, and a model guessing at them would
+# put invented paths beside observed ones.
+EXTRACTABLE_ENTITY_KINDS = frozenset({EntityKind.SERVICE, EntityKind.PERSON,
+                                      EntityKind.CONCEPT})
+
+# Relations the session can state. The rest — contains, touched_with,
+# changed_in, alias_of — are derived, not reported.
+EXTRACTABLE_RELATIONS = frozenset({EntityEdgeKind.CALLS, EntityEdgeKind.RUNS,
+                                   EntityEdgeKind.OWNS})
+
+
+def _known_entities(store: Store, scope: str) -> list:
+    """The entities already recorded in this scope, most mentioned first.
+
+    Shown so a session that says "the auth service calls the billing service"
+    can point the relation at a node that exists, instead of the graph growing
+    a second copy of everything under a slightly different name.
+    """
+    rows = store.conn.execute(
+        "SELECT id, kind, name FROM entities WHERE scope IN (?, 'global')"
+        " AND status = ? ORDER BY mentions DESC, last_seen DESC LIMIT ?",
+        (scope, EntityStatus.ALIVE, KNOWN_ENTITY_LIMIT),
+    ).fetchall()
+    return list(rows)
+
+
+def _known_entities_block(rows: list) -> str:
+    if not rows:
+        return ""
+    lines = ["## Known things (use these ids for target)", ""]
+    lines += [f"[{r['id']}] {r['kind']}: {r['name']}" for r in rows]
+    return "\n".join(lines) + "\n\n"
+
+
+def _entities_from(store: Store, result: dict, *, scope: str, shown_ids: set[int]) -> int:
+    """Write the entities the extraction proposed. Returns how many landed.
+
+    A target the model was not shown is dropped rather than created, mirroring
+    the guard on proposed fact ids: real ids are guessable, and a relation
+    pointing at an invented one would be an edge to whatever happens to hold
+    that number.
+    """
+    from .entities import EntityGraph
+
+    graph = EntityGraph(store.conn)
+    written = 0
+    for item in result.get("entities") or []:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        kind = (item.get("kind") or "").strip().lower()
+        if not name or kind not in EXTRACTABLE_ENTITY_KINDS:
+            continue
+        entity = graph.upsert(kind=kind, name=name, scope=scope)
+        written += 1
+
+        relation = (item.get("relation") or "").strip().lower()
+        target = _proposed_target(item)
+        if relation in EXTRACTABLE_RELATIONS and target in shown_ids:
+            graph.link(entity.id, target, kind=relation, source="observed")
+    return written
+
+
+def _proposed_target(item: dict) -> int | None:
+    try:
+        return int(item.get("target"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _mentioned_fact_ids(result: dict) -> set[int]:
     """Every fact id the grader tried to speak about, readable verdict or not.
 
@@ -590,10 +703,15 @@ def observe_transcript(
     # same set. Without a session id there is no injected set to grade, and
     # grading by fact id alone would reach across every session in the store.
     injected = store.ledger.pending(session_id=session_id) if session_id else []
+    # Which scope this session's entities belong in, resolved once: the same
+    # two-tier rule the facts below are written by.
+    entity_scope = scope or scope_for(Kind.PROJECT, cwd)
+    known_entities = _known_entities(store, entity_scope)
 
     backend = backend or detect_backend()
     result = structured(
         f"{_known_memory_block(known)}{_injected_block(injected)}"
+        f"{_known_entities_block(known_entities)}"
         f"## Session transcript\n\n{conversation}\n\n"
         "Record what should be remembered. Return an empty list if nothing "
         "durable was established.",
@@ -657,6 +775,8 @@ def observe_transcript(
                          session_id=session_id)
         _grades_from(store, result, injected, source=grade_source)
         _neutralise_unmentioned(store, injected, _mentioned_fact_ids(result))
+        _entities_from(store, result, scope=entity_scope,
+                       shown_ids={row["id"] for row in known_entities})
     return written
 
 
