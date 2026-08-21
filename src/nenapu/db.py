@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def default_db_path() -> Path:
@@ -335,6 +335,47 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+
+-- The entity tier: files, dirs, commits, services — joined to belief
+-- through fact_entities. `role='subject'` is load-bearing: a fact *about*
+-- a deleted file dies with it, a fact that merely *mentions* it does not.
+CREATE TABLE IF NOT EXISTS entities (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,   -- repo|dir|file|commit|command|service|person|concept
+    name       TEXT NOT NULL,
+    scope      TEXT NOT NULL DEFAULT 'global',
+    status     TEXT NOT NULL DEFAULT 'alive',   -- alive | gone
+    first_seen REAL NOT NULL,
+    last_seen  REAL NOT NULL,
+    mentions   INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(kind, name, scope)
+);
+
+CREATE TABLE IF NOT EXISTS entity_edges (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    src_id       INTEGER NOT NULL,
+    dst_id       INTEGER NOT NULL,
+    kind         TEXT NOT NULL,   -- contains|touched_with|changed_in|calls|runs|owns|alias_of
+    source       TEXT NOT NULL,   -- observed|declared|inferred
+    weight       REAL NOT NULL DEFAULT 1.0,
+    observations INTEGER NOT NULL DEFAULT 1,
+    valid_from   REAL NOT NULL,
+    valid_to     REAL,            -- NULL = still true
+    UNIQUE(src_id, dst_id, kind)
+);
+
+CREATE TABLE IF NOT EXISTS fact_entities (
+    fact_id   INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL,
+    role      TEXT NOT NULL,   -- subject | mentions
+    source    TEXT NOT NULL,   -- key | path | observed | model
+    PRIMARY KEY (fact_id, entity_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_edges_src ON entity_edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_dst ON entity_edges(dst_id);
+CREATE INDEX IF NOT EXISTS idx_fact_entities_entity ON fact_entities(entity_id);
+CREATE INDEX IF NOT EXISTS idx_entities_scope_status ON entities(scope, status);
 """
 
 

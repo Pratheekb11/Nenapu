@@ -1147,6 +1147,27 @@ def retrieval(
     console.print(f"[bold]{evidence['verdict']}[/] — {VERDICT_MEANING[evidence['verdict']]}")
 
 
+@app.command(rich_help_panel=ACTIVITY)
+def entities(
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild from the activity ledger"),
+    scope: str = typer.Option("", help="Limit the rebuild to one project scope"),
+    db: str = DB_OPT,
+) -> None:
+    """Bootstrap the entity graph from sessions, file events and commits.
+
+    Zero model calls — safe to run again, since a rebuild is idempotent.
+    """
+    from .entities import build_from_activity
+
+    store, _ = _stores(db)
+    if not rebuild:
+        console.print("Pass --rebuild to build the entity graph from the activity ledger.")
+        return
+    result = build_from_activity(store, scope=scope or None)
+    console.print(f"rebuilt from {result['sessions']} session(s) across "
+                  f"{result['scopes']} scope(s)")
+
+
 @app.command("project", rich_help_panel=ACTIVITY)
 def project_cmd(name: str, db: str = DB_OPT) -> None:
     """One repo: recent work, files touched, commits, pending."""

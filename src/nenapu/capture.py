@@ -300,9 +300,10 @@ def capture_session(
     events = file_events_from(lines, cwd=cwd)
     head_after = git_head(cwd) if cwd else None
 
+    pscope = project_scope(cwd) if cwd else "global"
     row_id = existing["id"] if existing is not None else ledger.start_session(
         agent=agent,
-        project_scope=project_scope(cwd) if cwd else "global",
+        project_scope=pscope,
         cwd=cwd,
         git_branch=(git_branch(cwd) if cwd else None) or meta["git_branch"],
         git_head_before=git_head_before,
@@ -315,6 +316,15 @@ def capture_session(
     if cwd:
         _record_git_evidence(ledger, row_id, cwd, git_head_before, head_after, events)
     ledger.end_session(row_id, git_head_after=head_after)
+
+    # Live sessions build entities as they land rather than waiting for an
+    # offline `nenapu entities --rebuild`. `build_from_activity` only reads
+    # `.conn`, so the ledger's connection is enough — no need for a Store
+    # here. Scoped to this session's project so a busy machine does not
+    # re-walk every repo's history on every session that ends.
+    from .entities import build_from_activity
+
+    build_from_activity(ledger, scope=pscope)
     return row_id
 
 

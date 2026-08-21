@@ -246,8 +246,67 @@ def _from_row(row: Any, cls: type) -> Any:
     return cls(**d)
 
 
+class EntityKind(_StrEnum):
+    """What sort of thing an entity node represents."""
+
+    REPO = "repo"
+    DIR = "dir"
+    FILE = "file"
+    COMMIT = "commit"
+    COMMAND = "command"
+    SERVICE = "service"
+    PERSON = "person"
+    CONCEPT = "concept"
+
+
+class EntityEdgeKind(_StrEnum):
+    """How one entity relates to another."""
+
+    CONTAINS = "contains"
+    TOUCHED_WITH = "touched_with"
+    CHANGED_IN = "changed_in"
+    CALLS = "calls"
+    RUNS = "runs"
+    OWNS = "owns"
+    ALIAS_OF = "alias_of"
+
+
+class EntityStatus(_StrEnum):
+    ALIVE = "alive"
+    GONE = "gone"
+
+
+@dataclass
+class Entity:
+    kind: str
+    name: str
+    scope: str = "global"
+    id: int | None = None
+    status: str = EntityStatus.ALIVE
+    first_seen: float = field(default_factory=now)
+    last_seen: float = field(default_factory=now)
+    mentions: int = 1
+
+
+@dataclass
+class EntityEdge:
+    src_id: int
+    dst_id: int
+    kind: str
+    source: str = "observed"
+    weight: float = 1.0
+    observations: int = 1
+    id: int | None = None
+    valid_from: float = field(default_factory=now)
+    valid_to: float | None = None
+
+
 def row_to_fact(row: Any) -> Fact:
     return _from_row(row, Fact)
+
+
+def row_to_entity(row: Any) -> Entity:
+    return _from_row(row, Entity)
 
 
 def row_to_recall(row: Any) -> Recall:
