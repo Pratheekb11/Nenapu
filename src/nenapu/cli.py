@@ -19,6 +19,7 @@ from .audit import audit as run_audit
 from .distill import distill as run_distill
 from .export import render, write_file
 from .models import Fact, Kind, Skill, Status
+from .retrieval_report import MIN_DAYS_OF_DATA
 from .store import DAY, effective_confidence, now
 from .verify import run_check, apply_result, verify_scope
 
@@ -357,7 +358,7 @@ def _landing(store):
         columns.add_row(dog(scale), right)
         return Group(*wordmark(console), Text(""), columns) if header else columns
 
-    def stacked(art: bool, commands: bool, recent: int = 0):
+    def stacked(art: bool, commands: bool, recent: int = 0, hint_line: bool = True):
         parts = [panel(console, version=__version__, conn=conn, path=path or "",
                        backend=backend, rows=rows, art=art), Text("")]
         if recent and store is not None:
@@ -366,7 +367,7 @@ def _landing(store):
                 parts += [Text.from_markup("[bold]Lately[/]"), learned, Text("")]
         if commands:
             parts += [_commands_table(), Text("")]
-        return Group(*parts, hint)
+        return Group(*parts, hint) if hint_line else Group(*parts[:-1])
 
     # The drawing is seven rows tall whatever its width, so a ladder of sizes
     # cannot fill a tall screen on its own — it lands on whichever rung is
@@ -388,10 +389,15 @@ def _landing(store):
 
     # Stacked, for terminals too narrow to put anything beside anything else.
     # Same trick: measure the frame, then fill what is left with facts.
-    for art in (True, False):
-        frame = stacked(art, True)
+    # The one-line pointer at `--help` is shed before the block letters are.
+    # Every command it refers to is already on the screen above it, and the
+    # wordmark is the part being protected — one more command registered must
+    # not be what costs a twenty-five row terminal the thing it came to see.
+    for art, hint_line in ((True, True), (True, False), (False, True)):
+        frame = stacked(art, True, hint_line=hint_line)
         if _height(console, frame) <= rows - 2:
-            return _grown(lambda n: stacked(art, True, n), frame, rows - 2)
+            return _grown(lambda n: stacked(art, True, n, hint_line=hint_line),
+                          frame, rows - 2)
     return _first_that_fits([stacked(False, True), stacked(False, False)], rows - 2)
 
 
@@ -1055,6 +1061,43 @@ def pending(
 def _match_project(ledger, name: str) -> str | None:
     matches = sorted(s for s in ledger.known_scopes() if name.lower() in s.lower())
     return matches[0] if matches else None
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def retrieval(
+    window_days: int = typer.Option(MIN_DAYS_OF_DATA, "--window-days",
+                                    help="How far back to read the recall ledger"),
+    db: str = DB_OPT,
+) -> None:
+    """Read the recall ledger and say whether retrieval is what fails.
+
+    Shows the counts it decided from, so the verdict can be disagreed with on
+    the numbers rather than on faith. Reads only: nothing here grades,
+    expires or dedupes anything on the way past.
+    """
+    from .retrieval_report import VERDICT_MEANING, retrieval_evidence
+
+    store, _ = _stores(db)
+    evidence = retrieval_evidence(store, window_days=window_days)
+
+    table = Table()
+    table.add_column("measure")
+    table.add_column("value", justify="right")
+    for label, value in (
+        ("graded recalls", evidence["graded"]),
+        ("good", evidence["good"]),
+        ("bad", evidence["bad"]),
+        ("neutral", evidence["neutral"]),
+        ("pending (not evidence)", evidence["pending"]),
+        ("bad rate", f"{evidence['bad_rate']:.0%}"),
+        ("from another project", evidence["wrong_project"]),
+        ("sessions given memory", evidence["sessions_with_recalls"]),
+        ("sessions given nothing", evidence["sessions_without_recalls"]),
+        ("days of data", f"{evidence['days_of_data']:.1f}"),
+    ):
+        table.add_row(label, str(value))
+    console.print(table)
+    console.print(f"[bold]{evidence['verdict']}[/] — {VERDICT_MEANING[evidence['verdict']]}")
 
 
 @app.command("project", rich_help_panel=ACTIVITY)
