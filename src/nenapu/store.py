@@ -378,6 +378,59 @@ class Store:
             )
         commit(self.conn)
 
+    def note_recurrence(self, fact_id: int, *, actor: str = "observer") -> Fact | None:
+        """The same claim, said again. Bumps the counter and re-anchors decay.
+
+        The count is what separates a preference stated once from one the user
+        has now had to repeat five times, which is the most actionable signal
+        the store holds and the one near-duplicate rows used to destroy: five
+        rows each saying "once" instead of one row saying "five times".
+        """
+        fact = self.get(fact_id)
+        if fact is None:
+            return None
+        with self.transaction():
+            self.conn.execute(
+                "UPDATE facts SET occurrences = occurrences + 1, last_verified_at = ?,"
+                " updated_at = ? WHERE id = ?",
+                (now(), now(), fact_id),
+            )
+            self._journal("recur", fact_id=fact_id, actor=actor)
+            commit(self.conn)
+        return self.get(fact_id)
+
+    def revise(
+        self,
+        fact_id: int,
+        *,
+        text: str,
+        kind: str | None = None,
+        key: str | None = None,
+        actor: str = "observer",
+    ) -> Fact | None:
+        """Re-word an existing fact in place rather than storing it twice.
+
+        Refuses to touch a `user_stated` fact: an agent's reading of a session
+        must never silently overwrite what the user said, which is the oldest
+        invariant in the store. The recurrence is still counted, because being
+        told the same thing again is true whoever ends up owning the wording.
+        """
+        fact = self.get(fact_id)
+        if fact is None:
+            return None
+        if fact.origin == Origin.USER_STATED:
+            return self.note_recurrence(fact_id, actor=actor)
+        with self.transaction():
+            self.conn.execute(
+                "UPDATE facts SET text = ?, kind = ?, key = ?, occurrences = occurrences + 1,"
+                " last_verified_at = ?, updated_at = ? WHERE id = ?",
+                (text, kind or fact.kind, key if key is not None else fact.key,
+                 now(), now(), fact_id),
+            )
+            self._journal("revise", fact_id=fact_id, actor=actor, detail=text[:80])
+            commit(self.conn)
+        return self.get(fact_id)
+
     def soft_verify(self, fact_id: int, *, actor: str = "audit") -> None:
         """Re-anchor a fact on evidence read by a model rather than a command.
 

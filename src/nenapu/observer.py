@@ -47,6 +47,10 @@ MAX_TAIL_BYTES = 24_000_000
 MAX_CONVERSATION_CHARS = 24_000
 
 MAX_INJECTED = 12
+# What the extractor is shown of the store before it reads the session. The
+# extraction already runs at thousands of tokens against an 83-second call, so
+# this is a fixed budget rather than something that grows with the store.
+RELEVANT_MEMORY_LIMIT = 12
 # Warnings are worth their tokens, but a store mid-cascade can have hundreds.
 MAX_SUSPECT_INJECTED = 5
 MIN_INJECTED_CONFIDENCE = 0.35
@@ -59,6 +63,8 @@ EXTRACT_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "op": {"type": "string", "enum": ["add", "update", "noop"]},
+                    "target_id": {"type": "integer"},
                     "text": {"type": "string"},
                     "kind": {"type": "string",
                              "enum": ["user", "project", "environment", "feedback"]},
@@ -89,7 +95,17 @@ and anything you are inferring rather than reading.
 Write each as a standalone sentence that will still make sense in six months
 with none of this conversation around it. Give a dotted key for facts that are
 one value for one subject (db.port, test.command), otherwise an empty string.
-Prefer few, durable facts over many disposable ones."""
+Prefer few, durable facts over many disposable ones.
+
+You may be shown what is already known, each line starting with its id. For
+every fact you record, say which it is:
+- op "add" for something not already in that list
+- op "update" with target_id set to one of those ids, when the session says
+  more about a fact already listed, or says it again in different words
+- op "noop" with target_id set, when the session only confirms what is
+  already recorded word for word
+
+Only use an id you were actually shown. Never invent one."""
 
 
 # ---------- redaction ----------
@@ -305,22 +321,99 @@ def store_messages(
     return len(pairs)
 
 
+# Words too common to narrow anything down. Anything longer than this list
+# would be tuning a search that FTS already ranks.
+_QUERY_STOPWORDS = {
+    "user", "assistant", "the", "and", "for", "that", "this", "with", "from",
+    "have", "has", "was", "were", "you", "your", "not", "but", "are", "its",
+    "it", "we", "our", "they", "them", "then", "than", "into", "just", "like",
+    "what", "when", "where", "which", "will", "would", "should", "could",
+}
+# Enough terms to describe a session, few enough that FTS stays a cheap query.
+_MAX_QUERY_TERMS = 40
+
+
+def _salient_terms(conversation: str) -> str:
+    """The words worth searching the store for, out of a whole session.
+
+    Order of first appearance is kept rather than frequency-ranked: the thing
+    a session was about is usually named early, and the tail of a long session
+    is mostly the assistant agreeing with itself.
+    """
+    seen: list[str] = []
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9_.-]{3,}", conversation.lower()):
+        if word in _QUERY_STOPWORDS or word in seen:
+            continue
+        seen.append(word)
+        if len(seen) >= _MAX_QUERY_TERMS:
+            break
+    return " ".join(seen)
+
+
+def relevant_memory(
+    store: Store, conversation: str, *, scope: str | None = None,
+    limit: int = RELEVANT_MEMORY_LIMIT,
+) -> list[Fact]:
+    """What the store already knows about what this session was about.
+
+    An extractor shown nothing can only ever propose `add`, which is how the
+    same fact came to be learned five separate times. One FTS query over the
+    session's own words is the whole cost — no second model call.
+    """
+    query = _salient_terms(conversation)
+    if not query:
+        return []
+    scopes = ["global", scope] if scope else None
+    hits = store.search(
+        query, scope=scopes, limit=limit, mark_used=False, log_recall=False,
+    )
+    return [fact for fact, _score, _explain in hits][:limit]
+
+
+def _known_memory_block(facts: list[Fact]) -> str:
+    """The retrieved facts, with the ids an `update` has to point at."""
+    if not facts:
+        return ""
+    lines = ["## Already known (use these ids for update/noop)", ""]
+    lines += [f"[{fact.id}] {fact.text}" for fact in facts]
+    return "\n".join(lines) + "\n\n"
+
+
+def _proposed_id(item: dict) -> int | None:
+    raw = item.get("target_id")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def observe_transcript(
     store: Store,
     transcript: Path,
     *,
     session_id: str | None = None,
+    scope: str | None = None,
     backend: Backend | None = None,
     apply: bool = True,
 ) -> list[Fact]:
-    """Extract what a finished session taught, and store it."""
+    """Extract what a finished session taught, and store it.
+
+    The model is shown what is already known about the session's subject, so
+    it can say "this updates fact 12" rather than adding a fifth phrasing of
+    something recorded four times already. What it says is a *proposal*: the
+    ids it may point at are only the ones it was shown, and the store's own
+    rules still decide what happens to the row.
+    """
     conversation = _read_transcript(Path(transcript))
     if len(conversation) < 200:
         return []  # nothing substantive happened
 
+    known = relevant_memory(store, conversation, scope=scope)
+    shown_ids = {fact.id for fact in known}
+
     backend = backend or detect_backend()
     result = structured(
-        f"## Session transcript\n\n{conversation}\n\n"
+        f"{_known_memory_block(known)}## Session transcript\n\n{conversation}\n\n"
         "Record what should be remembered. Return an empty list if nothing "
         "durable was established.",
         EXTRACT_SCHEMA,
@@ -335,6 +428,21 @@ def observe_transcript(
         if not text:
             continue
         correction = bool(item.get("correction"))
+        # A model that has not been told about the new field, or one that
+        # dropped it, is proposing what it has always proposed.
+        op = (item.get("op") or "add").strip().lower()
+        # A target the model was not shown is not a target. Real ids are
+        # guessable, and the 1.5b model in the calibration table invented nine
+        # of them for four facts — harmless while every op was an add, and the
+        # exact hazard this schema introduces.
+        target = _proposed_id(item)
+        if target not in shown_ids:
+            target = None
+            op = "add" if op == "update" else op
+
+        if op == "noop":
+            continue  # already recorded, word for word
+
         fact = Fact(
             text=text,
             kind=item.get("kind") or (Kind.FEEDBACK if correction else Kind.PROJECT),
@@ -346,10 +454,17 @@ def observe_transcript(
             origin_ref=f"session {session_id}" if session_id else "observed session",
             confidence=0.8 if correction else 0.65,
             session_id=session_id,
+            scope=scope or "global",
         )
         if not apply:
             written.append(fact)
             continue
+
+        if op == "update" and target is not None:
+            revised = store.revise(target, text=text, kind=fact.kind, key=fact.key)
+            if revised is not None:
+                written.append(revised)
+                continue
         stored, conflicts = store.write(fact, actor="observer")
         written.append(stored)
     return written

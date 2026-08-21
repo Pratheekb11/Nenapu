@@ -59,11 +59,6 @@ from nenapu.models import Fact, Kind, Origin
 from nenapu.observer import observe_transcript
 from nenapu.store import Store
 
-pytestmark = pytest.mark.xfail(
-    reason="Task 9 (Opus 5) not implemented — tests written first", strict=False
-)
-
-
 class FakeBackend:
     name = "fake"
     model = "fake"
