@@ -20,7 +20,7 @@ from __future__ import annotations
 import sqlite3
 from collections import deque
 
-from .models import Edge, EdgeKind, EdgeSource, Status, now
+from .models import Edge, EdgeKind, EdgeSource, Outcome, Status, now
 from .db import commit, transaction
 
 # An inferred edge is a guess from co-occurrence, so it cascades more weakly
@@ -176,20 +176,40 @@ class Graph:
     def infer_edges_for(
         self, child_id: int, session_id: str | None, *, within_seconds: float = 3600.0
     ) -> list[Edge]:
-        """Link a newly written fact to what the session had just recalled.
+        """Link a newly written fact to what the session actually used.
 
         This is the part that makes the graph survive contact with reality: an
         agent that recalled A and B and then concluded C almost certainly used
         A and B to get there, and no agent will declare that by hand.
+
+        Prefers recalls this session graded `good` over raw co-occurrence: on
+        a store where every session starts with a twelve-fact context dump,
+        "whatever was recalled in the last hour" links a conclusion to the
+        whole dump rather than to what was used. The co-occurrence fallback
+        only applies when the session has graded nothing at all, so the
+        feature does not vanish on every store that has never graded a
+        recall — which today is every store.
         """
         if not session_id:
             return []
 
-        rows = self.conn.execute(
-            "SELECT DISTINCT fact_id FROM recalls WHERE session_id = ? AND created_at >= ?"
-            " AND fact_id != ? ORDER BY created_at DESC LIMIT ?",
-            (session_id, now() - within_seconds, child_id, MAX_INFERRED_PARENTS),
-        ).fetchall()
+        graded_something = self.conn.execute(
+            "SELECT 1 FROM recalls WHERE session_id = ? AND outcome != ? LIMIT 1",
+            (session_id, Outcome.PENDING),
+        ).fetchone()
+
+        if graded_something:
+            rows = self.conn.execute(
+                "SELECT DISTINCT fact_id FROM recalls WHERE session_id = ? AND outcome = ?"
+                " AND fact_id != ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, Outcome.GOOD, child_id, MAX_INFERRED_PARENTS),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT DISTINCT fact_id FROM recalls WHERE session_id = ? AND created_at >= ?"
+                " AND fact_id != ? ORDER BY created_at DESC LIMIT ?",
+                (session_id, now() - within_seconds, child_id, MAX_INFERRED_PARENTS),
+            ).fetchall()
 
         edges = []
         for row in rows:
