@@ -52,11 +52,6 @@ import pytest
 
 from nenapu import connect
 
-pytestmark = pytest.mark.xfail(
-    reason="Task 4 (Opus 5) not implemented — tests written first", strict=False
-)
-
-
 # ---------- transcript fixtures, shaped like the real thing ----------
 
 

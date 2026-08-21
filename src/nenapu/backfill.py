@@ -1,25 +1,24 @@
 """Backfill the activity ledger from transcripts already on disk.
 
-A parse, not an extraction: only session metadata and tool-use `file_path`
-blocks are read from each JSONL line, so recovering months of history costs
-no tokens and no model calls.
+A parse, not an extraction: session metadata and tool-use blocks are read
+straight out of each JSONL line by `capture`, so recovering months of history
+costs no tokens and no model calls.
+
+The parse itself lives in `capture` rather than here. Two parsers would mean
+the backfilled sessions and every future session disagree about what a
+session contains — the backfill would keep missing `Read`, and "which agent
+looked at this file" would be answerable only for sessions recorded after
+the split was noticed.
 """
 
 from __future__ import annotations
 
 import glob
-import json
 from pathlib import Path
 
 from .activity import ActivityLedger
+from .capture import file_events_from, read_lines, session_meta_from
 from .store import project_scope
-
-# Tools that touch a file, and what that touch means for the ledger.
-_TOOL_OP = {
-    "Write": "created",
-    "Edit": "edited",
-    "NotebookEdit": "edited",
-}
 
 
 def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str) -> int | None:
@@ -29,50 +28,29 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
     session id or was already backfilled — safe to call again once new
     transcripts have arrived, since a session already present by
     `external_id` is left untouched rather than re-ingested.
+
+    Paths are stored exactly as the transcript spelled them. Unlike a live
+    capture, a backfill is reading history: the working directory it names
+    may since have moved or been deleted, so resolving relative paths against
+    it would invent locations rather than record them.
     """
-    text = Path(path).read_text()
-
-    session_id: str | None = None
-    cwd: str | None = None
-    git_branch: str | None = None
-    events: list[tuple[str, str, str | None]] = []
-
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        session_id = event.get("sessionId") or session_id
-        cwd = event.get("cwd") or cwd
-        git_branch = event.get("gitBranch") or git_branch
-
-        message = event.get("message") or {}
-        for block in message.get("content") or []:
-            if not isinstance(block, dict) or block.get("type") != "tool_use":
-                continue
-            op = _TOOL_OP.get(block.get("name"))
-            if op is None:
-                continue
-            file_path = (block.get("input") or {}).get("file_path")
-            if file_path:
-                events.append((file_path, op, block.get("name")))
-
-    if session_id is None:
-        return None
-    if ledger.get_session(session_id) is not None:
+    lines = read_lines(path)
+    meta = session_meta_from(lines)
+    session_id = meta["session_id"]
+    if session_id is None or ledger.get_session(session_id) is not None:
         return None
 
-    scope = project_scope(cwd) if cwd else "global"
     row_id = ledger.start_session(
-        agent=agent, project_scope=scope, cwd=cwd, git_branch=git_branch,
+        agent=agent,
+        project_scope=project_scope(meta["cwd"]) if meta["cwd"] else "global",
+        cwd=meta["cwd"],
+        git_branch=meta["git_branch"],
         external_id=session_id,
     )
-    for file_path, op, tool in events:
-        ledger.record_file_event(row_id, path=file_path, op=op, tool=tool)
+    for event in file_events_from(lines):
+        ledger.record_file_event(
+            row_id, path=event["path"], op=event["op"], tool=event["tool"], at=event["at"],
+        )
     return row_id
 
 

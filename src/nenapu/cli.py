@@ -1048,10 +1048,53 @@ def recall_hook(db: str = DB_OPT) -> None:
         # nobody.
         store, _ = open_store(db or os.environ.get("NENAPU_DB"))
         text = recall_context(store, session_id=session_id)
+        _open_activity_session(store, session_id, payload.get("cwd"))
     except Exception:  # noqa: BLE001 — a hook must never break the session
         raise typer.Exit(0)
     if text:
         print(text)
+
+
+def _agent_name() -> str:
+    """Which agent is running. Everything wired through hooks today is Claude
+    Code; the watcher will set this per adapter."""
+    return os.environ.get("NENAPU_AGENT") or "claude-code"
+
+
+def _open_activity_session(store, session_id: str | None, cwd: str | None) -> None:
+    """Record the starting commit while it is still knowable.
+
+    Session start is the only moment `git_head_before` can be read honestly,
+    and it is what "changed since you were last here" later diffs from.
+    """
+    from .activity import ActivityLedger
+    from .capture import open_session
+
+    open_session(
+        ActivityLedger(store.conn),
+        agent=_agent_name(),
+        external_id=session_id,
+        cwd=cwd or os.getcwd(),
+    )
+
+
+def _capture_activity(path: str, session_id: str | None, db: str | None) -> None:
+    """Fold a finished session's tool calls and git diff into the ledger.
+
+    Deterministic and free, so it runs on its own rather than behind the
+    extraction: a session whose model backend is unavailable — or that was
+    read with `--no-infer` — still leaves a record of what it touched.
+    """
+    from .activity import ActivityLedger
+    from .capture import capture_session
+
+    try:
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        capture_session(
+            ActivityLedger(store.conn), Path(path), agent=_agent_name(),
+        )
+    except Exception:  # noqa: BLE001 — the ledger must never break a session
+        return
 
 
 # The log holds the text of every fact the extraction wrote, which is the same
@@ -1162,6 +1205,10 @@ def learn(
         if from_stdin:
             raise typer.Exit(0)  # a hook with no transcript is not an error
         raise typer.BadParameter("no transcript path (pass one, or --stdin from a hook)")
+
+    # Before any branch below: the model half can be skipped, detached or
+    # unavailable, and none of that changes what the session did to the files.
+    _capture_activity(path, session_id, db)
 
     if no_infer:
         # Never calls the model — the whole point is a cheap way to inspect

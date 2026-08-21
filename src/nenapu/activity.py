@@ -135,7 +135,7 @@ class ActivityLedger:
         if session is None:
             return []
         rows = self.conn.execute(
-            "SELECT * FROM file_events WHERE session_id = ? ORDER BY at", (session["id"],)
+            "SELECT * FROM file_events WHERE session_id = ? ORDER BY at, id", (session["id"],)
         )
         return [dict(r) for r in rows]
 
