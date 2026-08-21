@@ -74,7 +74,6 @@ e1 = pytest.mark.xfail(strict=True, reason="E1 not implemented yet: remove when 
 e2 = pytest.mark.xfail(strict=True, reason="E2 not implemented yet: remove when it lands")
 e3 = pytest.mark.xfail(strict=True, reason="E3 not implemented yet: remove when it lands")
 e4 = pytest.mark.xfail(strict=True, reason="E4 not implemented yet: remove when it lands")
-e5 = pytest.mark.xfail(strict=True, reason="E5 not implemented yet: remove when it lands")
 e6 = pytest.mark.xfail(strict=True, reason="E6 not implemented yet: remove when it lands")
 e8 = pytest.mark.xfail(strict=True, reason="E8 not implemented yet: remove when it lands")
 e9 = pytest.mark.xfail(strict=True, reason="E9 not implemented yet: remove when it lands")
@@ -746,7 +745,6 @@ def test_ordinary_prose_does_not_match_anything(store, ledger):
 # ==========================================================================
 
 
-@e5
 def test_the_three_spellings_resolve_to_one_node(store, graph):
     """`services/auth`, `auth service` and `AuthService` must resolve to one
     node or traversal fragments into synonyms and returns nothing."""
@@ -762,7 +760,6 @@ def test_the_three_spellings_resolve_to_one_node(store, graph):
     assert len(canonical) == 1
 
 
-@e5
 def test_the_deterministic_path_needs_no_model(store, graph, monkeypatch):
     """Basename, case fold, snake/camel split — the common cases are decided
     without asking anything, and the model is only for the leftovers."""
@@ -778,7 +775,6 @@ def test_the_deterministic_path_needs_no_model(store, graph, monkeypatch):
     assert called == []
 
 
-@e5
 def test_two_genuinely_different_entities_are_not_merged(store, graph):
     """The false-positive cost, and the reason this task is Opus 5: a wrong
     merge is not recoverable by inspection. Two different entities collapsed
@@ -794,7 +790,6 @@ def test_two_genuinely_different_entities_are_not_merged(store, graph):
     assert graph.canonical(a.id).id != graph.canonical(b.id).id
 
 
-@e5
 def test_an_alias_is_recorded_as_an_edge_not_a_deletion(store, graph):
     """The rows stay, and the graph records that one is a spelling of the
     other — the same reason `forget` retires rather than deletes."""
@@ -811,7 +806,6 @@ def test_an_alias_is_recorded_as_an_edge_not_a_deletion(store, graph):
     assert {(r["src_id"], r["dst_id"]) for r in edges} & {(a.id, b.id), (b.id, a.id)}
 
 
-@e5
 def test_traversal_follows_an_alias_transparently(store, graph):
     """A query anchored on one spelling has to reach facts attached to
     another, or the merge bought nothing."""
@@ -828,7 +822,6 @@ def test_traversal_follows_an_alias_transparently(store, graph):
     assert other.id in reached
 
 
-@e5
 def test_aliases_do_not_cross_scope(store, graph):
     from nenapu import entities
 
@@ -840,7 +833,6 @@ def test_aliases_do_not_cross_scope(store, graph):
     assert graph.canonical(here.id).id != graph.canonical(there.id).id
 
 
-@e5
 def test_resolution_is_idempotent(store, graph):
     from nenapu import entities
 

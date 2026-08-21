@@ -21,6 +21,7 @@ from git and transcript tool calls, never asked of a model.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import deque
 
@@ -88,6 +89,26 @@ class EntityGraph:
     def get(self, entity_id: int):
         row = self.conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
         return row_to_entity(row) if row else None
+
+    def canonical(self, entity_id: int):
+        """Follow `alias_of` to the node that owns this spelling.
+
+        Aliases are edges rather than deletions, so every caller that means
+        "the thing itself" has to ask. Cycle-guarded: a chain that loops
+        stops at the first repeat rather than spinning.
+        """
+        seen = {entity_id}
+        current = entity_id
+        while True:
+            row = self.conn.execute(
+                "SELECT dst_id FROM entity_edges WHERE src_id = ? AND kind = ?"
+                " AND valid_to IS NULL LIMIT 1",
+                (current, EntityEdgeKind.ALIAS_OF),
+            ).fetchone()
+            if row is None or row["dst_id"] in seen:
+                return self.get(current)
+            current = row["dst_id"]
+            seen.add(current)
 
     def find(self, *, kind: str | None = None, name: str, scope: str = "global"):
         sql = "SELECT * FROM entities WHERE name = ? AND scope = ?"
@@ -387,3 +408,204 @@ def mentions_from_text(store, *, scope: str | None = None) -> int:
             commit(conn)
             written += 1
     return written
+
+
+# ---------- E5 · alias resolution ----------
+#
+# `services/auth`, `auth service` and `AuthService` are one thing spelled three
+# ways, and a traversal that treats them as three nodes fragments into synonyms
+# and returns nothing.
+#
+# The cost of getting this wrong is asymmetric and that shapes the design. A
+# missed alias leaves the graph as it is today. A wrong merge corrupts every
+# traversal through the merged node, is invisible to inspection, and nothing in
+# the system would report it. So:
+#
+#   * only human-named kinds are ever merged. A path is already an exact
+#     identifier: `a/b.py` and `b/a.py` are two files, whatever their words
+#     have in common, and the same holds for dirs, repos and commit shas.
+#   * a merge needs the same scope and the same kind. "Right fact, wrong
+#     project" is a failure scoping already had to fix once.
+#   * an alias is an edge, never a deletion, so a wrong merge is at least
+#     undoable.
+
+# Kinds whose names are prose, and are therefore worth normalising. Everything
+# else is an exact identifier where two spellings mean two things.
+ALIASABLE_KINDS = frozenset({EntityKind.SERVICE, EntityKind.PERSON, EntityKind.CONCEPT})
+
+# Words that say what sort of thing something is rather than which thing it is.
+# `auth service` and `AuthService` normalise together with them kept; they are
+# dropped only when a name would otherwise be nothing but these.
+_NAME_NOISE = frozenset({"the", "a", "an", "of", "and"})
+
+# How many facts two entities must both be attached to before the model is
+# asked about them at all. Co-occurrence is the only evidence available that
+# two names that do not normalise together might still be one thing.
+MIN_COOCCURRENCE_FOR_MODEL = 3
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_NAME_SEPARATORS = re.compile(r"[^A-Za-z0-9]+")
+
+ALIAS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "aliases": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                    "same": {"type": "boolean"},
+                },
+                "required": ["a", "b", "same"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["aliases"],
+    "additionalProperties": False,
+}
+
+ALIAS_SYSTEM = """\
+You are told about pairs of names that appear in one project's memory, and for
+each pair you say whether the two names refer to the same thing.
+
+Say true only when they are two spellings of one thing. Two related things, two
+parts of one system, or two things that are often worked on together are not
+the same thing. When you are unsure, say false: leaving two names apart costs a
+missed connection, merging two different things corrupts everything recorded
+about either one."""
+
+
+def _alias_key(name: str) -> frozenset[str]:
+    """The normal form two spellings of one name share.
+
+    Basename, case fold, snake and camel split, and a naive singular. Order is
+    dropped on purpose: `services/auth` and `auth service` are the same name
+    said in two directions.
+    """
+    spaced = _NAME_SEPARATORS.sub(" ", _CAMEL_BOUNDARY.sub(" ", name or ""))
+    words = [w.lower() for w in spaced.split() if w]
+    singular = {w[:-1] if len(w) > 3 and w.endswith("s") else w for w in words}
+    meaningful = singular - _NAME_NOISE
+    return frozenset(meaningful or singular)
+
+
+def _alias_groups(rows: list) -> list[list]:
+    """Entities that share a normal form, grouped within scope and kind."""
+    groups: dict[tuple, list] = {}
+    for row in rows:
+        key = _alias_key(row["name"])
+        if not key:
+            continue
+        groups.setdefault((row["scope"], row["kind"], key), []).append(row)
+    return [members for members in groups.values() if len(members) > 1]
+
+
+def _canonical_of(members: list):
+    """The spelling the others become aliases of.
+
+    Most mentioned first, because that is the name the project actually uses;
+    then oldest, then lowest id, so the choice does not move between runs.
+    """
+    return sorted(members, key=lambda r: (-r["mentions"], r["first_seen"], r["id"]))[0]
+
+
+def _link_aliases(graph: EntityGraph, members: list) -> int:
+    canonical = _canonical_of(members)
+    linked = 0
+    for row in members:
+        if row["id"] == canonical["id"]:
+            continue
+        if graph.canonical(row["id"]).id == canonical["id"]:
+            continue  # already resolved; a rerun must not add a second edge
+        if graph.link(row["id"], canonical["id"], kind=EntityEdgeKind.ALIAS_OF,
+                      source="inferred") is not None:
+            linked += 1
+    return linked
+
+
+def _cooccurring_pairs(conn: sqlite3.Connection, rows: list) -> list[tuple]:
+    """Pairs of aliasable entities attached to the same facts often enough to
+    be worth a question, and which normalisation did not already join."""
+    by_id = {row["id"]: row for row in rows}
+    if len(by_id) < 2:
+        return []
+    marks = ",".join("?" * len(by_id))
+    counts = conn.execute(
+        f"SELECT a.entity_id AS a_id, b.entity_id AS b_id, COUNT(*) AS shared"
+        f" FROM fact_entities a JOIN fact_entities b ON a.fact_id = b.fact_id"
+        f" AND a.entity_id < b.entity_id"
+        f" WHERE a.entity_id IN ({marks}) AND b.entity_id IN ({marks})"
+        f" GROUP BY a.entity_id, b.entity_id HAVING shared >= ?",
+        [*by_id, *by_id, MIN_COOCCURRENCE_FOR_MODEL],
+    ).fetchall()
+
+    pairs = []
+    for row in counts:
+        first, second = by_id[row["a_id"]], by_id[row["b_id"]]
+        if first["scope"] != second["scope"] or first["kind"] != second["kind"]:
+            continue
+        if _alias_key(first["name"]) == _alias_key(second["name"]):
+            continue  # the deterministic pass already has this one
+        pairs.append((first, second))
+    return pairs
+
+
+def _model_aliases(store, graph: EntityGraph, rows: list, backend) -> int:
+    """Ask about the leftovers only: names that co-occur heavily and never
+    normalise together. Ids the model was not shown are dropped, mirroring the
+    guard the extractor already uses on proposed ids."""
+    from .llm import structured
+
+    pairs = _cooccurring_pairs(store.conn, rows)
+    if not pairs:
+        return 0
+
+    shown = {(a["id"], b["id"]) for a, b in pairs}
+    listing = "\n".join(
+        f"{a['id']}: {a['name']}  |  {b['id']}: {b['name']}" for a, b in pairs
+    )
+    result = structured(
+        f"Pairs of names from one project:\n\n{listing}\n\n"
+        "For each pair, is it two spellings of one thing?",
+        ALIAS_SCHEMA, system=ALIAS_SYSTEM, backend=backend, max_tokens=1024,
+    )
+
+    by_id = {row["id"]: row for row in rows}
+    linked = 0
+    for item in result.get("aliases") or []:
+        if not isinstance(item, dict) or not item.get("same"):
+            continue
+        try:
+            pair = (int(item["a"]), int(item["b"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if pair not in shown and pair[::-1] not in shown:
+            continue
+        linked += _link_aliases(graph, [by_id[pair[0]], by_id[pair[1]]])
+    return linked
+
+
+def resolve_aliases(store, *, scope: str | None = None, backend=None) -> int:
+    """Join the spellings of one name into one node. Returns edges added.
+
+    Deterministic normalisation decides the common cases with no model call.
+    The model is opt-in — pass a backend — and is only ever shown the
+    leftovers: names that co-occur heavily and that normalisation did not
+    join. Running twice adds nothing the first run did not.
+    """
+    graph = EntityGraph(store.conn)
+    marks = ",".join("?" * len(ALIASABLE_KINDS))
+    sql = f"SELECT * FROM entities WHERE kind IN ({marks}) AND status = ?"
+    args: list = [*sorted(ALIASABLE_KINDS), EntityStatus.ALIVE]
+    if scope is not None:
+        sql += " AND scope = ?"
+        args.append(scope)
+    rows = store.conn.execute(sql, args).fetchall()
+
+    linked = sum(_link_aliases(graph, members) for members in _alias_groups(rows))
+    if backend is not None:
+        linked += _model_aliases(store, graph, rows, backend)
+    return linked
