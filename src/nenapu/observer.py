@@ -492,6 +492,46 @@ def _graded_fact_id(item: dict, allowed: set[int]) -> int | None:
     return fact_id if fact_id in allowed else None
 
 
+# G5: a fact that was in context all session and never came up is evidence too,
+# and it is what fills the denominator the gate divides by. Its own source
+# keeps it measurable separately from a verdict the grader actually gave, and
+# lets a later audit exclude it if it proves noisy.
+UNUSED_GRADE_SOURCE = "observer-unused"
+
+
+def _mentioned_fact_ids(result: dict) -> set[int]:
+    """Every fact id the grader tried to speak about, readable verdict or not.
+
+    A grade whose verdict is unusable is not silence: the extractor named the
+    fact and we could not read what it said, which is no more evidence of
+    "never came up" than a failed model call is. Those stay pending.
+    """
+    mentioned: set[int] = set()
+    for item in result.get("grades") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            mentioned.add(int(item.get("fact_id")))
+        except (TypeError, ValueError):
+            continue
+    return mentioned
+
+
+def _neutralise_unmentioned(store: Store, recalls: list, mentioned: set[int]) -> int:
+    """Grade the injections the extractor never named.
+
+    Only ever called after an extraction succeeded. A failed or skipped model
+    call has said nothing about what was injected, and neutralising on one
+    would manufacture the evidence the gate reads. `Ledger.grade` is
+    first-grade-wins, so a human verdict still stands.
+    """
+    return sum(
+        1 for recall in recalls
+        if recall.fact_id not in mentioned
+        and store.ledger.grade(recall.id, Outcome.NEUTRAL, source=UNUSED_GRADE_SOURCE)
+    )
+
+
 def _grades_from(
     store: Store, result: dict, recalls: list, *, source: str = "observer",
 ) -> int:
@@ -616,6 +656,7 @@ def observe_transcript(
         _open_loops_from(store, result.get("open_loops") or [], scope=scope,
                          session_id=session_id)
         _grades_from(store, result, injected, source=grade_source)
+        _neutralise_unmentioned(store, injected, _mentioned_fact_ids(result))
     return written
 
 

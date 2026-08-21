@@ -70,7 +70,6 @@ from nenapu.llm import LLMUnavailable
 from nenapu.models import Fact, Outcome
 from nenapu.store import Store
 
-g5 = pytest.mark.xfail(strict=True, reason="G5 not implemented yet: remove when it lands")
 g6 = pytest.mark.xfail(strict=True, reason="G6 not implemented yet: remove when it lands")
 
 DAY = 86400.0
@@ -440,7 +439,6 @@ def test_grades_are_applied_by_the_helper_the_plan_names(store):
 # ==========================================================================
 
 
-@g5
 def test_every_injected_recall_is_graded_after_a_successful_extraction(
     store, tmp_path, monkeypatch
 ):
@@ -463,7 +461,6 @@ def test_every_injected_recall_is_graded_after_a_successful_extraction(
     assert all(outcome != Outcome.PENDING for outcome, _src in outcomes)
 
 
-@g5
 def test_the_unnamed_ones_are_neutral_and_carry_their_own_source(
     store, tmp_path, monkeypatch
 ):
@@ -524,7 +521,6 @@ def test_a_dry_run_neutralises_nothing(store, tmp_path, monkeypatch):
     assert _outcomes(store) == [(Outcome.PENDING, None)]
 
 
-@g5
 def test_only_this_session_is_neutralised(store, tmp_path, monkeypatch):
     """Another session's pending recalls are another session's evidence."""
     from nenapu.observer import observe_transcript
