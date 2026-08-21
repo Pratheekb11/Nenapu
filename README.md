@@ -181,7 +181,14 @@ nenapu activity              # the raw ledger, newest first
 nenapu where app/models.py   # which agent touched this file, and when
 nenapu project backend       # one repo: sessions, files, commits
 nenapu pending               # open loops: mentioned, never done
+nenapu backfill              # replay the transcripts already on disk
 ```
+
+`backfill` is the one to run first on a machine that has been in use for a
+while: the ledger starts empty, and every transcript under
+`~/.claude/projects` is a session it can recover. It is a parse, not an
+extraction — no model call, no tokens — and running it again picks up only
+what has arrived since.
 
 Deletion is why git is read at all. A file removed by `rm` is named in no tool
 call, and parsing shell strings for it is fragile enough to be worse than not
@@ -215,6 +222,14 @@ Agents with no hook API are covered by polling instead:
 ```bash
 nenapu watch --once          # one pass over the transcripts on disk
 nenapu init --watch          # install the background unit
+```
+
+The Stop hook does not extract either. It writes one job to the queue and
+starts a detached worker, so two sessions ending together cost two queued
+jobs rather than two concurrent 83-second model calls against one store:
+
+```bash
+nenapu drain                 # work the queue, one worker at a time
 ```
 
 A transcript is read once its size has held still for two minutes, and an

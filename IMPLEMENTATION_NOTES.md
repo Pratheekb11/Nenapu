@@ -278,6 +278,36 @@ session ended on to HEAD now. A recorded commit can become unreachable after a
 rebase or a pruned branch, and there the section is simply absent: a
 SessionStart hook that raises is a session that starts knowing nothing.
 
+## The hook queues; the worker does everything else
+
+The queue was built so that sessions ending together could not fan out into
+concurrent extractions, and then the Stop hook kept forking one of its own —
+so the queue only ever serialised the watcher. Worse, everything downstream
+of the queue (`run_maintenance_tick`, loop closure, ledger capture on the
+extraction side) rides on `worker.drain`, and `drain` only ran from `nenapu
+watch`. On a machine that uses hooks and never starts the watcher, none of
+the self-maintenance ran at all.
+
+The hook now writes one row and spawns `nenapu drain`. Three details decide
+whether that is an improvement or a rename:
+
+**Capture moved with it.** Leaving the ledger write on the hook would mean
+two processes reading the same transcript for two halves of the same job.
+The worker does both, in order: deterministic and free first, so a model
+backend that is down costs the facts rather than the record.
+
+**Dedupe covers pending work only.** Two hooks for one session — a retry, or
+the watcher and the hook reaching the same file — must not buy two
+extractions of identical content. A *resumed* session has appended new
+material and has to be read again, so a finished job is no reason to refuse.
+
+**The lock lives beside the store.** One fixed path meant a test store and
+the real one blocking each other, and the hook passes the worker nothing but
+`--db`. `worker.lock` sits next to the database file it protects.
+
+The installed hook command string did not change, so no machine has to
+re-run `nenapu init` to get any of this.
+
 ## The watcher polls, and refuses to guess
 
 Only Claude Code can announce that a session ended. Everything else writes a
@@ -523,7 +553,9 @@ originality in the wrong place.
 - Vectors and an entity tier are designed but deliberately unbuilt: the plan
   gates both on the recall ledger showing that retrieval is what fails, and
   building them first would invent the design that evidence is supposed to
-  choose.
+  choose. `nenapu retrieval` is that gate, executed rather than argued —
+  today it answers `insufficient-evidence` on 0 graded recalls out of 327
+  logged, so the open question is what grades a recall, not what indexes it.
 - The watcher ships one adapter. Codex, Gemini, OpenCode and Cursor need a
   probing session against a machine that has them installed.
 - Ollama keeps generating after a client timeout; handled, not elegant.
