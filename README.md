@@ -221,8 +221,14 @@ Agents with no hook API are covered by polling instead:
 
 ```bash
 nenapu watch --once          # one pass over the transcripts on disk
+nenapu watch --probe         # what each glob matches here; queues nothing
 nenapu init --watch          # install the background unit
 ```
+
+Claude Code and Codex are registered, each with a real transcript in
+`tests/fixtures/transcripts/` as the evidence. An agent is added by probing a
+file it wrote, not by guessing a path — so if you have Gemini, OpenCode or
+Cursor, `nenapu watch --probe` is what says whether a glob would find them.
 
 The Stop hook does not extract either. It writes one job to the queue and
 starts a detached worker, so two sessions ending together cost two queued

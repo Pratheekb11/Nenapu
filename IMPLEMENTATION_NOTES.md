@@ -314,9 +314,30 @@ Only Claude Code can announce that a session ended. Everything else writes a
 file and says nothing.
 
 **An adapter is data.** A glob and a parser in a list, so adding an agent is
-registering an entry rather than editing the observer. Only Claude Code is
-registered, deliberately: a glob nobody has watched match is a feature that
-reports success and captures nothing.
+registering an entry rather than editing the observer. Claude Code and Codex
+are registered, and both ship the transcript they were probed against under
+`tests/fixtures/transcripts/`; a test refuses any adapter that does not.
+Gemini, OpenCode and Cursor are absent because this machine does not have
+them — a glob nobody has watched match is a feature that reports success and
+captures nothing. `nenapu watch --probe` is how someone else checks a glob
+against their own machine without ingesting anything.
+
+**The parser was decorative until it was used.** `TranscriptFormat.parse`
+was stored and never called: the tick enqueued a path and the extraction
+re-read it with Claude Code's parser whatever wrote it. Measured on a real
+Codex rollout, that harvests **0 characters** against 5,120 for the Codex
+parser, so a registered adapter would have discovered sessions, queued them,
+spent nothing and reported success. `worker._ingest` now resolves the parser
+by the job's agent.
+
+A Codex rollout also spells its own metadata differently — everything is
+wrapped in `payload`, with `session_id` on `session_meta` and `cwd` on both
+that and `turn_context` — so `session_meta_from` reads both spellings.
+Without it a Codex session gets no ledger row and its facts fall back to the
+`global` scope. Its *file events* are still unread: Codex records what it
+touched in `patch_apply_end` stdout and in `custom_tool_call` arguments,
+neither of which is a `tool_use` block, so `nenapu where` answers for Claude
+Code only.
 
 **"Finished" is measured across ticks, not read off the mtime.** A session
 that ended two minutes ago and one still being written look the same to
@@ -556,7 +577,9 @@ originality in the wrong place.
   choose. `nenapu retrieval` is that gate, executed rather than argued —
   today it answers `insufficient-evidence` on 0 graded recalls out of 327
   logged, so the open question is what grades a recall, not what indexes it.
-- The watcher ships one adapter. Codex, Gemini, OpenCode and Cursor need a
-  probing session against a machine that has them installed.
+- The watcher ships two adapters, Claude Code and Codex. Gemini, OpenCode and
+  Cursor need a probing session against a machine that has them installed;
+  `nenapu watch --probe` is the tool for it. Codex sessions reach the ledger
+  and the extractor but contribute no file events yet.
 - Ollama keeps generating after a client timeout; handled, not elegant.
 - Python 3.10 through 3.13 are run in CI; nothing outside that range is.
