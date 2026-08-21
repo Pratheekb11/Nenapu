@@ -437,12 +437,10 @@ def remember(
     db: str = DB_OPT,
 ) -> None:
     """Store a fact."""
-    from .store import project_scope
+    from .store import scope_for
 
     store, _ = _stores(db)
-    resolved_scope = scope or (
-        "global" if kind in (Kind.USER, Kind.FEEDBACK) else project_scope(os.getcwd())
-    )
+    resolved_scope = scope or scope_for(kind)
     fact, conflicts = store.write(
         Fact(
             text=text, kind=kind, scope=resolved_scope, key=key or None, origin=origin,
@@ -1054,6 +1052,7 @@ def recall_hook(db: str = DB_OPT) -> None:
     agent reads it without having to ask for it.
     """
     from .observer import hook_payload, recall_context
+    from .store import project_scope
 
     try:
         payload = hook_payload(sys.stdin.read()) if not sys.stdin.isatty() else {}
@@ -1062,8 +1061,15 @@ def recall_hook(db: str = DB_OPT) -> None:
         # hook running before the user has typed anything would spend it on
         # nobody.
         store, _ = open_store(db or os.environ.get("NENAPU_DB"))
-        text = recall_context(store, session_id=session_id)
-        _open_activity_session(store, session_id, payload.get("cwd"))
+        # The line the whole project-scoping task exists for. Called without a
+        # scope, this injected the top facts across every repo on the machine,
+        # so a session in one backend was told about another project's Ollama
+        # context window.
+        cwd = payload.get("cwd") or os.getcwd()
+        text = recall_context(
+            store, scope=project_scope(cwd), cwd=cwd, session_id=session_id,
+        )
+        _open_activity_session(store, session_id, cwd)
     except Exception:  # noqa: BLE001 — a hook must never break the session
         raise typer.Exit(0)
     if text:
@@ -1205,6 +1211,7 @@ def learn(
 
     session_id = None
     path = transcript
+    cwd = os.getcwd()
     if from_stdin:
         if os.environ.get("NENAPU_OBSERVING"):
             # A hook is firing *inside* an extraction. When the model backend
@@ -1220,6 +1227,7 @@ def learn(
         payload = hook_payload(sys.stdin.read())
         path = payload.get("transcript_path", "")
         session_id = payload.get("session_id")
+        cwd = payload.get("cwd") or cwd
     if not path:
         if from_stdin:
             raise typer.Exit(0)  # a hook with no transcript is not an error
@@ -1263,6 +1271,9 @@ def learn(
         learned = observe_transcript(
             store, Path(path),
             session_id=session_id or os.environ.get("NENAPU_SESSION_ID"),
+            # Which repo the session was in, so what it taught is retrieved,
+            # scoped and written per project rather than into one global pile.
+            cwd=cwd,
             apply=not dry_run,
         )
     except LLMUnavailable as exc:

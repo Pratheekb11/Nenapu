@@ -31,12 +31,13 @@ import json
 import os
 import re
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from .db import commit, transaction
 from .llm import Backend, LLMUnavailable, detect_backend, structured
 from .models import Fact, Kind, Origin, Status, now
-from .store import Store, effective_confidence
+from .store import Store, effective_confidence, scope_for
 
 # Keep the injected block small. It is prepended to every session, so it is
 # paid for on every request whether or not it gets used.
@@ -47,6 +48,13 @@ MAX_TAIL_BYTES = 24_000_000
 MAX_CONVERSATION_CHARS = 24_000
 
 MAX_INJECTED = 12
+# Per-section caps for the project block. A refactor session can touch two
+# hundred files and a neglected project can hold fifty loops; either would
+# spend the whole context budget on one section of a block that is paid for on
+# every request.
+MAX_LEFT_OFF_FILES = 6
+MAX_OPEN_LOOPS = 5
+MAX_CHANGED = 8
 # What the extractor is shown of the store before it reads the session. The
 # extraction already runs at thousands of tokens against an 83-second call, so
 # this is a fixed budget rather than something that grows with the store.
@@ -410,6 +418,7 @@ def observe_transcript(
     *,
     session_id: str | None = None,
     scope: str | None = None,
+    cwd: str | None = None,
     backend: Backend | None = None,
     apply: bool = True,
 ) -> list[Fact]:
@@ -471,8 +480,11 @@ def observe_transcript(
             origin_ref=f"session {session_id}" if session_id else "observed session",
             confidence=0.8 if correction else 0.65,
             session_id=session_id,
-            scope=scope or "global",
         )
+        # Same two-tier rule the CLI writes by: a correction about how the
+        # user works follows them everywhere, a fact about this repo does not.
+        fact = replace(fact, scope=scope_for(fact.kind, cwd) if scope is None
+                       else ("global" if fact.kind in (Kind.USER, Kind.FEEDBACK) else scope))
         if not apply:
             written.append(fact)
             continue
@@ -515,14 +527,99 @@ def _open_loops_from(
         )
 
 
+def _ago(seconds: float) -> str:
+    if seconds < 3600:
+        return "moments ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def _left_off_section(ledger, scope: str) -> list[str]:
+    """The last session in this repo: what it touched, and what it committed.
+
+    One session, not a changelog. "Where you left off" is a question about the
+    most recent thing, and the sessions before it are what `nenapu activity`
+    is for.
+    """
+    sessions = ledger.sessions_for_scope(scope, limit=1)
+    if not sessions:
+        return []
+    session = sessions[0]
+
+    paths: list[str] = []
+    for event in ledger.file_events_for_session(session["id"]):
+        if event["path"] not in paths:
+            paths.append(event["path"])
+    commits = ledger.commits_for_session(session["id"])
+    if not paths and not commits:
+        return []
+
+    when = _ago(now() - (session["ended_at"] or session["started_at"]))
+    lines = [f"Where you left off ({when}, {session['agent']}):"]
+    if paths:
+        lines.append("- touched " + ", ".join(paths[:MAX_LEFT_OFF_FILES]))
+    if commits and commits[-1]["subject"]:
+        lines.append(f"- last commit: \"{commits[-1]['subject']}\"")
+    lines.append("")
+    return lines
+
+
+def _open_loops_section(conn, scope: str) -> list[str]:
+    from .loops import LoopBook
+
+    loops = LoopBook(conn).open_for_scope(scope)
+    if not loops:
+        return []
+    lines = ["Open here — mentioned but not done:"]
+    lines += [f"- {loop['text']}" for loop in loops[:MAX_OPEN_LOOPS]]
+    lines.append("")
+    return lines
+
+
+def _changed_section(ledger, scope: str, cwd: str | None) -> list[str]:
+    """What moved in the repo while this project was somebody else's problem.
+
+    One git call, from the commit the last session ended on to HEAD now. A
+    recorded head can become unreachable through a rebase or a pruned branch,
+    in which case there is no evidence and the section is simply absent —
+    a SessionStart hook that raises is a session that starts knowing nothing.
+    """
+    if not cwd:
+        return []
+    from .capture import changed_paths, git_head
+
+    last = next((s for s in ledger.sessions_for_scope(scope, limit=10)
+                 if s["git_head_after"]), None)
+    if last is None:
+        return []
+    changed = changed_paths(cwd, last["git_head_after"], git_head(cwd))
+    if not changed:
+        return []
+
+    lines = ["Changed since you were last here:"]
+    lines += [f"- {op} {path}" for op, path in changed[:MAX_CHANGED]]
+    if len(changed) > MAX_CHANGED:
+        lines.append(f"- ... and {len(changed) - MAX_CHANGED} more")
+    lines.append("")
+    return lines
+
+
 def recall_context(
-    store: Store, *, scope: str | None = None, limit: int = MAX_INJECTED,
-    session_id: str | None = None,
+    store: Store, *, scope: str | None = None, cwd: str | None = None,
+    limit: int = MAX_INJECTED, session_id: str | None = None,
 ) -> str:
     """What the agent should know before it starts, as plain text.
 
     Emitted into the session's context rather than returned from a tool: the
     agent reads it whether or not it would have thought to ask.
+
+    With a `scope` this is about one repository: the facts are that project's
+    plus the global ones, and three sections come from the activity ledger
+    rather than from the belief network — where the last session left off,
+    what is open here, and what changed while you were elsewhere. Unscoped it
+    renders exactly as before, which the MCP surface and `nenapu rules` rely
+    on. `cwd` is where the one git call for "changed since" runs.
 
     Without `session_id` this was a plain SELECT — no recall logged, no
     `use_count` bumped — which is why the outcome ledger and the
@@ -530,6 +627,19 @@ def recall_context(
     Passing it logs the injected set as recalls with an empty query, since a
     session-start injection has no query for BM25 to have been involved in.
     """
+    from .activity import ActivityLedger
+
+    # Two-tier by construction: how the user works travels with them, what a
+    # repo does stays in the repo. Unscoped means everything, as before.
+    scopes = ["global", scope] if scope else None
+    project_lines: list[str] = []
+    if scope:
+        ledger = ActivityLedger(store.conn)
+        project_lines = (
+            _left_off_section(ledger, scope)
+            + _open_loops_section(store.conn, scope)
+            + _changed_section(ledger, scope, cwd)
+        )
     # Suspect facts are included on purpose. They are exactly the ones an agent
     # would otherwise use without knowing their foundation collapsed, and
     # listing them under a warning is the only way the cascade reaches the
@@ -537,7 +647,7 @@ def recall_context(
     # belief network invisible where it matters most.
     facts = [
         (fact, effective_confidence(fact))
-        for fact in store.list_facts(scope=scope, status=(Status.ACTIVE, Status.SUSPECT),
+        for fact in store.list_facts(scope=scopes, status=(Status.ACTIVE, Status.SUSPECT),
                                      limit=500)
     ]
     # The confidence floor is a filter on what to *believe*, so it must not be
@@ -547,7 +657,7 @@ def recall_context(
     suspect = [(f, c) for f, c in facts if f.status == Status.SUSPECT]
     sound = [(f, c) for f, c in facts
              if f.status != Status.SUSPECT and c >= MIN_INJECTED_CONFIDENCE]
-    if not sound and not suspect:
+    if not sound and not suspect and not project_lines:
         return ""
 
     # Corrections first, and among them the ones said most often — a
@@ -563,7 +673,8 @@ def recall_context(
         store.ledger.log_many(hits, session_id=session_id, query="")
         store.mark_used([fact.id for fact, _ in chosen])
 
-    lines = ["# Memory (nenapu)", ""]
+    header = f"# Memory (nenapu) — {scope}" if scope else "# Memory (nenapu)"
+    lines = [header, "", *project_lines]
     kept = [f for f, _ in chosen if f.status != Status.SUSPECT]
     doubted = [f for f, _ in chosen if f.status == Status.SUSPECT]
     corrections = [f for f in kept if f.kind == Kind.FEEDBACK]

@@ -71,10 +71,6 @@ from nenapu import connect
 from nenapu.models import Fact, Kind
 from nenapu.store import Store
 
-pytestmark = pytest.mark.xfail(
-    reason="Task 7 (Opus 5) not implemented — tests written first", strict=False
-)
-
 DAY = 86400.0
 
 

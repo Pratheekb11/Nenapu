@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import math
+import os
 import random
 import re
 import sqlite3
@@ -31,6 +32,7 @@ from .models import (
     Conflict,
     Decay,
     Fact,
+    Kind,
     Origin,
     Status,
     VerifyStatus,
@@ -82,6 +84,17 @@ def project_scope(cwd: str) -> str:
         pass
     digest = hashlib.sha1(str(root).encode()).hexdigest()[:8]
     return f"repo:{root.name}@{digest}"
+
+
+def scope_for(kind: str, cwd: str | None = None) -> str:
+    """Which tier a fact of this kind belongs in.
+
+    Two tiers, one rule, in one place: how the user wants to be worked with
+    travels with them, and what a repository does stays in the repository.
+    """
+    if kind in (Kind.USER, Kind.FEEDBACK):
+        return "global"
+    return project_scope(cwd or os.getcwd())
 
 
 def decay_factor(decay_class: str, age_seconds: float) -> float:
