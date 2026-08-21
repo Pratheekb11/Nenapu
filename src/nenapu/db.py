@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def default_db_path() -> Path:
@@ -269,6 +269,20 @@ CREATE TABLE IF NOT EXISTS ingest_queue (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_queue_state ON ingest_queue(state, enqueued_at);
+
+-- What the watcher has seen, so a transcript is ingested once and a session
+-- still being written is left alone. Keyed by path because that is the only
+-- identifier every agent's transcript format is guaranteed to have.
+CREATE TABLE IF NOT EXISTS watch_state (
+    path          TEXT PRIMARY KEY,
+    agent         TEXT NOT NULL,
+    last_size     INTEGER NOT NULL DEFAULT 0,
+    last_mtime    REAL,
+    seen_at       REAL,          -- when the size above was observed
+    ingested_at   REAL,
+    ingested_size INTEGER,       -- so a resumed session is picked up again
+    session_id    TEXT
+);
 
 -- Downsampled activity: a work log compressed by age, not similarity. One
 -- row replaces a whole period's sessions once they age out of full detail.

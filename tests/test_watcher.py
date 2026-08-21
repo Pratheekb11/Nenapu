@@ -77,10 +77,6 @@ import pytest
 
 from nenapu import connect
 
-pytestmark = pytest.mark.xfail(
-    reason="Task 15 (Opus 5) not implemented — tests written first", strict=False
-)
-
 
 def _line(role: str, text: str) -> str:
     return json.dumps({

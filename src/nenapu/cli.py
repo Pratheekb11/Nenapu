@@ -1429,6 +1429,8 @@ def _usage_guide(console_out) -> None:
 @app.command(rich_help_panel=DIAGNOSE)
 def init(
     yes: bool = typer.Option(False, "--yes", help="Accept the detected defaults"),
+    watch: bool = typer.Option(False, "--watch",
+                               help="Also install the background watcher unit"),
     db: str = DB_OPT,
 ) -> None:
     """Set Nenapu up as a layer over the agent you already use."""
@@ -1442,11 +1444,82 @@ def init(
 
     _big_panel(console, db, store=store)
     _setup_walkthrough(console, yes=yes)
+    if watch:
+        _install_watch_unit(console, yes=yes)
     _usage_guide(console)
     if store is not None:
         # Someone who ran setup by hand should not be walked through it again
         # the next time they type a bare `nenapu`.
         mark_walked(store.conn)
+
+
+WATCH_UNIT_PATH = Path("~/.config/systemd/user/nenapu-watch.service")
+
+WATCH_UNIT = """\
+[Unit]
+Description=Nenapu transcript watcher
+
+[Service]
+Type=simple
+ExecStart=%s watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def _install_watch_unit(console_out, *, yes: bool = False) -> None:
+    """Install the user unit that keeps the watcher running.
+
+    Under the same consent rule as the hooks: this writes into a directory the
+    user owns, so a pipe or a CI job is not permission. Without a terminal it
+    says what it would write and writes nothing.
+    """
+    import shutil
+
+    path = WATCH_UNIT_PATH.expanduser()
+    if not (yes or sys.stdin.isatty()):
+        console_out.print(f"  [dim]·[/] would install {path}")
+        return
+
+    entry = shutil.which("nenapu") or f"{sys.executable} -m nenapu.cli"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        shutil.copy(path, path.with_suffix(".service.nenapu-backup"))
+    path.write_text(WATCH_UNIT % entry)
+    console_out.print(f"  [green]✓[/] watcher unit written to {path}")
+    console_out.print("  [dim]systemctl --user enable --now nenapu-watch[/]")
+
+
+@app.command(rich_help_panel=UPKEEP)
+def watch(
+    once: bool = typer.Option(False, "--once", help="Run a single pass and exit"),
+    batch: bool = typer.Option(False, "--batch",
+                               help="Enqueue the whole backlog rather than one session"),
+    interval: float = typer.Option(60.0, help="Seconds between passes"),
+    db: str = DB_OPT,
+) -> None:
+    """Watch for finished sessions from agents that have no hook API."""
+    import time as _time
+
+    from .watch import tick
+    from .worker import drain
+
+    store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+    while True:
+        queued = tick(store.conn, batch=batch)
+        if queued:
+            console.print(f"queued {len(queued)} session(s) for extraction")
+        # Enqueueing without draining would be a watcher that reports work and
+        # learns nothing. One worker, holding a lock, does both here.
+        done = drain(store)
+        if done:
+            console.print(f"extracted {done} session(s)")
+        if once:
+            return
+        _time.sleep(interval)
 
 
 @app.command(rich_help_panel=DIAGNOSE)
