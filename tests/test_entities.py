@@ -74,7 +74,6 @@ e1 = pytest.mark.xfail(strict=True, reason="E1 not implemented yet: remove when 
 e2 = pytest.mark.xfail(strict=True, reason="E2 not implemented yet: remove when it lands")
 e3 = pytest.mark.xfail(strict=True, reason="E3 not implemented yet: remove when it lands")
 e4 = pytest.mark.xfail(strict=True, reason="E4 not implemented yet: remove when it lands")
-e6 = pytest.mark.xfail(strict=True, reason="E6 not implemented yet: remove when it lands")
 e8 = pytest.mark.xfail(strict=True, reason="E8 not implemented yet: remove when it lands")
 e9 = pytest.mark.xfail(strict=True, reason="E9 not implemented yet: remove when it lands")
 
@@ -851,7 +850,6 @@ def test_resolution_is_idempotent(store, graph):
 # ==========================================================================
 
 
-@e6
 def test_marking_an_entity_gone_records_the_status(store, graph):
     entity = graph.upsert(kind="file", name="services/auth/routes.py", scope=SCOPE)
 
@@ -860,7 +858,6 @@ def test_marking_an_entity_gone_records_the_status(store, graph):
     assert graph.get(entity.id).status == "gone"
 
 
-@e6
 def test_the_facts_it_was_the_subject_of_come_back_as_a_list(store, graph):
     """`mark_gone` returns what it falsified, so a caller can report it rather
     than having to re-derive it."""
@@ -872,7 +869,6 @@ def test_the_facts_it_was_the_subject_of_come_back_as_a_list(store, graph):
     assert graph.mark_gone(entity.id, reason="deleted") == [fact.id]
 
 
-@e6
 def test_a_deleted_file_falsifies_the_fact_about_it_end_to_end(store, tmp_path):
     """Detection rides `_record_git_evidence`, which already sees deletions.
     The end-to-end shape the plan asks for: delete a tracked file, run the
@@ -921,7 +917,6 @@ def test_a_deleted_file_falsifies_the_fact_about_it_end_to_end(store, tmp_path):
     assert "falsified" in recall_context(store, scope=scope, cwd=str(repo)).lower()
 
 
-@e6
 def test_a_restored_file_brings_its_fact_back(store, graph):
     fact, _ = store.write(Fact(text="services/auth/routes.py owns the login handler",
                                scope=SCOPE))
@@ -935,7 +930,6 @@ def test_a_restored_file_brings_its_fact_back(store, graph):
     assert store.get(fact.id).status == Status.ACTIVE
 
 
-@e6
 def test_a_fact_already_suspect_keeps_its_first_reason(store, graph):
     """"A fact already suspect stays suspect under its first recorded reason"
     — the rule `cascade_falsification` already keeps."""
@@ -951,7 +945,6 @@ def test_a_fact_already_suspect_keeps_its_first_reason(store, graph):
     assert store.get(fact.id).suspect_reason == first_reason
 
 
-@e6
 def test_a_retired_fact_is_not_dragged_back_into_doubt(store, graph):
     """Only `active` facts are touched. A fact already retired has its own
     story."""

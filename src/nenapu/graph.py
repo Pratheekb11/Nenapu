@@ -145,7 +145,7 @@ class Graph:
             ).fetchone()
             if not row or row["status"] != Status.SUSPECT:
                 continue
-            if self._has_broken_parent(child_id, ignore=fact_id):
+            if self.has_broken_parent(child_id, ignore=fact_id):
                 continue
             self.conn.execute(
                 "UPDATE facts SET status=?, suspect_since=NULL, suspect_reason=NULL,"
@@ -156,7 +156,13 @@ class Graph:
         commit(self.conn)
         return restored
 
-    def _has_broken_parent(self, fact_id: int, *, ignore: int | None = None) -> bool:
+    def has_broken_parent(self, fact_id: int, *, ignore: int | None = None) -> bool:
+        """Is anything this fact rests on still broken?
+
+        Public because recovery has a second trigger now: an entity coming
+        back reinstates the facts it falsified, and it has to make the same
+        check `clear_suspicion` makes rather than a second version of it.
+        """
         for parent_id, _source, _weight in self.parents(fact_id):
             if parent_id == ignore:
                 continue

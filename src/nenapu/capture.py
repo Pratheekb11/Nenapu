@@ -328,6 +328,25 @@ def capture_session(
     return row_id
 
 
+def _sync_entity_life(conn, path: str, op: str, scope: str) -> None:
+    """Let a file's life and death reach the facts that are about it.
+
+    Only ever acts on an entity that already exists: a deletion is not a
+    reason to invent a node for a file nothing was ever recorded about.
+    """
+    from .entities import EntityGraph
+    from .models import EntityKind, EntityStatus
+
+    graph = EntityGraph(conn)
+    entity = graph.find(kind=EntityKind.FILE, name=path, scope=scope)
+    if entity is None:
+        return
+    if op == "deleted" and entity.status != EntityStatus.GONE:
+        graph.mark_gone(entity.id, reason="deleted in this session")
+    elif op != "deleted" and entity.status == EntityStatus.GONE:
+        graph.mark_alive(entity.id)
+
+
 def _record_git_evidence(
     ledger: ActivityLedger,
     row_id: int,
@@ -354,6 +373,10 @@ def _record_git_evidence(
         if op != "deleted" and absolute in seen:
             continue
         ledger.record_file_event(row_id, path=absolute, op=op, tool="git")
+        # E6: git is the only place a deletion is visible without asking
+        # anyone, and a fact about a file that no longer exists is
+        # unsupported from that moment. Restoration reads the same way round.
+        _sync_entity_life(ledger.conn, absolute, op, project_scope(cwd))
     for entry in commits_between(cwd, before, after):
         ledger.record_commit(
             row_id, sha=entry["sha"], subject=entry["subject"],

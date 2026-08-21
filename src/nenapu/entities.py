@@ -33,11 +33,17 @@ from .models import (
     EntityKind,
     EntityStatus,
     HALF_LIFE_DAYS,
+    Status,
     now,
     row_to_entity,
 )
 
 DAY = 86400.0
+
+# The prefix a fact's `suspect_reason` carries when an entity's death is what
+# put it in doubt. Read back on recovery, so an entity coming back reinstates
+# only what its own death falsified.
+ENTITY_GONE_REASON = "subject entity gone"
 
 # A monorepo path eight directories deep should not become eight dir nodes —
 # a traversal would spend its whole depth budget walking upward. Only the
@@ -175,6 +181,103 @@ class EntityGraph:
                 order.append((other, hops + 1))
                 queue.append((other, hops + 1))
         return order
+
+    # ---------- E6 · entity death, cascaded into belief ----------
+    #
+    # The mechanism the join was built for. A fact *about* a file that no
+    # longer exists is unsupported the moment the file goes, and nobody is
+    # going to report that by hand. `role='subject'` is what makes it safe:
+    # a fact that merely mentions the file is not falsified by its deletion.
+    #
+    # Descendants are left to `cascade_falsification`, which is already
+    # depth-capped and cycle-safe. A second walk here would be one more place
+    # for the two to disagree.
+
+    def mark_gone(self, entity_id: int, *, reason: str) -> list[int]:
+        """The entity stopped existing; put the facts about it in doubt.
+
+        Returns every fact it falsified, subjects first, so a caller can
+        report them rather than re-deriving the list.
+        """
+        from .graph import Graph
+
+        entity = self.get(entity_id)
+        if entity is None:
+            return []
+        self.conn.execute(
+            "UPDATE entities SET status = ?, last_seen = ? WHERE id = ?",
+            (EntityStatus.GONE, now(), entity_id),
+        )
+        commit(self.conn)
+
+        belief = Graph(self.conn)
+        detail = f"{ENTITY_GONE_REASON}: {entity.name} ({reason})"
+        falsified: list[int] = []
+        for fact_id in self.subjects_of(entity_id):
+            row = self.conn.execute(
+                "SELECT status FROM facts WHERE id = ?", (fact_id,)
+            ).fetchone()
+            # Only active facts. One already suspect keeps its first recorded
+            # reason, and one retired or superseded has its own story — the
+            # rule `cascade_falsification` already keeps.
+            if row is None or row["status"] != Status.ACTIVE:
+                continue
+            self.conn.execute(
+                "UPDATE facts SET status=?, suspect_since=?, suspect_reason=?, updated_at=?"
+                " WHERE id=?",
+                (Status.SUSPECT, now(), detail, now(), fact_id),
+            )
+            self.conn.execute(
+                "INSERT INTO journal(action, fact_id, actor, detail, created_at)"
+                " VALUES ('cascade', ?, 'entities', ?, ?)",
+                (fact_id, detail, now()),
+            )
+            commit(self.conn)
+            falsified.append(fact_id)
+            falsified += belief.cascade_falsification(fact_id, detail)
+        return list(dict.fromkeys(falsified))
+
+    def mark_alive(self, entity_id: int) -> list[int]:
+        """The entity came back; reinstate what its death falsified.
+
+        Recovery has to work in both directions or a file restored in the next
+        commit leaves a permanent scar. Only facts whose doubt came from *this*
+        entity are reinstated, and only when nothing else they rest on is still
+        broken.
+        """
+        from .graph import Graph
+
+        entity = self.get(entity_id)
+        if entity is None:
+            return []
+        self.conn.execute(
+            "UPDATE entities SET status = ?, last_seen = ? WHERE id = ?",
+            (EntityStatus.ALIVE, now(), entity_id),
+        )
+        commit(self.conn)
+
+        belief = Graph(self.conn)
+        restored: list[int] = []
+        for fact_id in self.subjects_of(entity_id):
+            row = self.conn.execute(
+                "SELECT status, suspect_reason FROM facts WHERE id = ?", (fact_id,)
+            ).fetchone()
+            if row is None or row["status"] != Status.SUSPECT:
+                continue
+            marker = f"{ENTITY_GONE_REASON}: {entity.name}"
+            if not (row["suspect_reason"] or "").startswith(marker):
+                continue  # suspect for some other reason, which still stands
+            if belief.has_broken_parent(fact_id):
+                continue
+            self.conn.execute(
+                "UPDATE facts SET status=?, suspect_since=NULL, suspect_reason=NULL,"
+                " updated_at=? WHERE id=?",
+                (Status.ACTIVE, now(), fact_id),
+            )
+            commit(self.conn)
+            restored.append(fact_id)
+            restored += belief.clear_suspicion(fact_id)
+        return list(dict.fromkeys(restored))
 
     # ---------- the bridge to belief ----------
 

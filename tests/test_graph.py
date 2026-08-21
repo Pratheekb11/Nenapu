@@ -179,7 +179,6 @@ def test_reasserting_a_fact_still_picks_up_this_session_dependencies(store, appr
 # ==========================================================================
 
 g10 = pytest.mark.xfail(strict=True, reason="G10 not implemented yet: remove when it lands")
-e6 = pytest.mark.xfail(strict=True, reason="E6 not implemented yet: remove when it lands")
 e10 = pytest.mark.xfail(strict=True, reason="E10 not implemented yet: remove when it lands")
 
 
@@ -296,7 +295,6 @@ def _entity_backed_fact(store, *, text, entity_name, role, scope="global"):
     return fact, entity
 
 
-@e6
 def test_killing_an_entity_makes_its_subject_facts_suspect(store, approve_all):
     from nenapu.entities import EntityGraph
 
@@ -312,7 +310,6 @@ def test_killing_an_entity_makes_its_subject_facts_suspect(store, approve_all):
     assert "auth" in (after.suspect_reason or "") or "gone" in (after.suspect_reason or "")
 
 
-@e6
 def test_a_fact_that_only_mentions_the_entity_survives(store, approve_all):
     """The distinction the bridge table exists for. Deleting a file does not
     falsify every sentence that ever named it."""
@@ -328,7 +325,6 @@ def test_a_fact_that_only_mentions_the_entity_survives(store, approve_all):
     assert store.get(fact.id).status == Status.ACTIVE
 
 
-@e6
 def test_descendants_go_suspect_through_the_existing_cascade(store, approve_all):
     """Reuse, not a second walk: `cascade_falsification` is already
     depth-capped and cycle-safe, and a parallel implementation would be one
@@ -348,7 +344,6 @@ def test_descendants_go_suspect_through_the_existing_cascade(store, approve_all)
     assert f"#{subject.id}" in store.get(derived.id).suspect_reason
 
 
-@e6
 def test_the_entity_coming_back_reinstates_what_it_falsified(store, approve_all):
     """Recovery is tested both ways, the way a failed check already is: a file
     restored in the next commit must not leave a permanent scar."""
@@ -366,7 +361,6 @@ def test_the_entity_coming_back_reinstates_what_it_falsified(store, approve_all)
     assert store.get(fact.id).status == Status.ACTIVE
 
 
-@e6
 def test_a_fact_with_another_broken_parent_stays_suspect(store, approve_all):
     """`clear_suspicion` already refuses to reinstate anything still propped
     up by a different broken parent, and the entity trigger inherits that."""
@@ -389,7 +383,6 @@ def test_a_fact_with_another_broken_parent_stays_suspect(store, approve_all):
     assert store.get(derived.id).status == Status.SUSPECT
 
 
-@e6
 def test_an_entity_with_no_facts_cascades_into_nothing(store, approve_all):
     from nenapu.entities import EntityGraph
 
