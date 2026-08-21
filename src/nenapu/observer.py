@@ -74,7 +74,19 @@ EXTRACT_SCHEMA = {
                 "required": ["text", "kind", "key", "correction"],
                 "additionalProperties": False,
             },
-        }
+        },
+        "open_loops": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "resolution_hint": {"type": "string"},
+                },
+                "required": ["text", "resolution_hint"],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": ["facts"],
     "additionalProperties": False,
@@ -105,7 +117,12 @@ every fact you record, say which it is:
 - op "noop" with target_id set, when the session only confirms what is
   already recorded word for word
 
-Only use an id you were actually shown. Never invent one."""
+Only use an id you were actually shown. Never invent one.
+
+Also record open loops: things the session said should happen and did not.
+Only what was left undone, never what was completed. Give a path glob in
+resolution_hint when the session named where the work would go, otherwise an
+empty string."""
 
 
 # ---------- redaction ----------
@@ -467,7 +484,35 @@ def observe_transcript(
                 continue
         stored, conflicts = store.write(fact, actor="observer")
         written.append(stored)
+
+    if apply:
+        _open_loops_from(store, result.get("open_loops") or [], scope=scope,
+                         session_id=session_id)
     return written
+
+
+def _open_loops_from(
+    store: Store, proposals: list[dict], *, scope: str | None, session_id: str | None,
+) -> None:
+    """Record what the session said it would do and did not.
+
+    Rides the same extraction call the facts came from, per the plan: a second
+    83-second model call to ask the same transcript a second question is the
+    version of this feature nobody would leave switched on.
+    """
+    from .loops import LoopBook
+
+    book = LoopBook(store.conn)
+    for item in proposals:
+        text = (item.get("text") or "").strip()
+        if not text:
+            continue
+        book.open_loop(
+            scope=scope or "global",
+            text=text,
+            resolution_hint=(item.get("resolution_hint") or "").strip() or None,
+            session_id=session_id,
+        )
 
 
 def recall_context(

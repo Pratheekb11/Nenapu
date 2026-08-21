@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def default_db_path() -> Path:
@@ -287,6 +287,25 @@ CREATE TABLE IF NOT EXISTS rollups (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rollups_scope ON rollups(project_scope, period);
+
+-- Things said but not done. Kept out of `facts` on purpose: a loop needs the
+-- evidence that would close it, a status and a reason it was retired, none of
+-- which a belief about the world wants. The ageing rule it does share with
+-- facts is a function, not a column.
+CREATE TABLE IF NOT EXISTS open_loops (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope           TEXT NOT NULL,
+    text            TEXT NOT NULL,
+    resolution_hint TEXT,           -- path globs the work would touch
+    kind            TEXT NOT NULL DEFAULT 'stated',  -- stated | interrupted
+    status          TEXT NOT NULL DEFAULT 'open',    -- open | closed
+    opened_at       REAL NOT NULL,
+    closed_at       REAL,
+    close_reason    TEXT,
+    session_id      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_open_loops_scope ON open_loops(scope, status);
 
 -- Working memory: verbatim turns, privacy-gated and off by default (see
 -- NENAPU_STORE_MESSAGES in observer.py). Everything else in this file holds

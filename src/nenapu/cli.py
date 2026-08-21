@@ -1000,12 +1000,27 @@ def where(path: str, db: str = DB_OPT) -> None:
 @app.command(rich_help_panel=ACTIVITY)
 def pending(
     project: str = typer.Option("", help="Limit to one project by name"),
+    show_all: bool = typer.Option(False, "--all", help="Include loops that have gone quiet"),
     db: str = DB_OPT,
 ) -> None:
     """Open loops — things mentioned but not yet done. Cross-project."""
-    # Open-loop capture and closure is a later task; today this reports the
-    # empty state honestly rather than nothing at all.
-    console.print(f"No open loops tracked yet{f' for {project}' if project else ''}.")
+    from .loops import LoopBook
+
+    store, _ = _stores(db)
+    loops = LoopBook(store.conn).all_open(include_quiet=show_all)
+    if project:
+        loops = [loop for loop in loops if project.lower() in loop["scope"].lower()]
+    if not loops:
+        console.print(f"No open loops tracked yet{f' for {project}' if project else ''}.")
+        return
+
+    table = Table()
+    table.add_column("project", style="cyan")
+    table.add_column("open loop")
+    table.add_column("closed by", style="dim")
+    for loop in loops:
+        table.add_row(loop["scope"], loop["text"], loop["resolution_hint"] or "-")
+    console.print(table)
 
 
 def _match_project(ledger, name: str) -> str | None:
@@ -1087,12 +1102,16 @@ def _capture_activity(path: str, session_id: str | None, db: str | None) -> None
     """
     from .activity import ActivityLedger
     from .capture import capture_session
+    from .loops import LoopBook
 
     try:
         store, _ = open_store(db or os.environ.get("NENAPU_DB"))
-        capture_session(
-            ActivityLedger(store.conn), Path(path), agent=_agent_name(),
-        )
+        ledger = ActivityLedger(store.conn)
+        row_id = capture_session(ledger, Path(path), agent=_agent_name())
+        if row_id is not None:
+            # Files changed and nothing committed is work left in flight, and
+            # it is knowable without asking a model anything.
+            LoopBook(store.conn).detect_interrupted(ledger, row_id)
     except Exception:  # noqa: BLE001 — the ledger must never break a session
         return
 

@@ -7,6 +7,11 @@ tested in isolation, never called from anywhere real. This is the one
 function the ingest-queue worker calls after draining, so cleaning up the
 store stops being a job a human has to remember to do.
 
+Loop closure runs here too. A loop nobody ever closes is the failure mode
+the feature cannot survive — being told about work that shipped months ago
+destroys trust in the whole block — so the evidence is re-checked on every
+tick rather than only when someone runs a command.
+
 Distillation (merging related facts once a scope exceeds its token budget)
 is deliberately not wired in here yet — it needs a budget heuristic this
 task does not have a tested contract for, and guessing one would be exactly
@@ -17,9 +22,11 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from .activity import ActivityLedger
 from .audit import audit as run_audit
 from .db import commit
 from .distill import dedupe
+from .loops import LoopBook
 from .models import now
 from .store import Store
 from .verify import verify_scope as run_check
@@ -61,6 +68,11 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     """
     store.ledger.expire_pending()
     _mark_run(store, "expire_pending")
+
+    # Cheap: two indexed reads per open loop, no model call. Run unscoped
+    # because evidence for a loop can land in a session the worker did not
+    # just ingest.
+    LoopBook(store.conn).close_satisfied(ActivityLedger(store.conn))
 
     for scope in touched_scopes:
         dedupe(store, scope=scope)

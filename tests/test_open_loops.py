@@ -68,10 +68,6 @@ from nenapu import connect
 from nenapu.models import now
 from nenapu.store import Store
 
-pytestmark = pytest.mark.xfail(
-    reason="Task 11 (Opus 5) not implemented — tests written first", strict=False
-)
-
 DAY = 86400.0
 SCOPE = "repo:backend@aaaaaaaa"
 OTHER = "repo:portfolio@bbbbbbbb"
