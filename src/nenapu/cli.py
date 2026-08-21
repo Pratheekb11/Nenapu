@@ -103,8 +103,11 @@ def _big_panel(console_out, db: str | None = None, store=None,
     return _height(console_out, hero) + 2
 
 
+DB_OPT = typer.Option(None, "--db", help="Path to the store (default ~/.nenapu/nenapu.db)")
+
+
 @app.callback(invoke_without_command=True)
-def main(ctx: typer.Context) -> None:
+def main(ctx: typer.Context, db: str = DB_OPT) -> None:
     """Show the mark, sized to the occasion.
 
     The full panel is for someone looking around; every other command gets one
@@ -119,7 +122,9 @@ def main(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is None:
         store = None
         try:
-            store, _ = open_store(os.environ.get("NENAPU_DB"))
+            # Named here as well as on every subcommand, so `nenapu --db other.db`
+            # shows that store rather than silently reading the default one.
+            store, _ = open_store(db or os.environ.get("NENAPU_DB"))
         except Exception:  # noqa: BLE001 — never fail on the greeting path
             pass
         if not quiet:
@@ -407,7 +412,6 @@ def _stores(db: str | None):
     return store, skills
 
 
-DB_OPT = typer.Option(None, "--db", help="Path to the store (default ~/.nenapu/nenapu.db)")
 
 
 @app.command(rich_help_panel=DIAGNOSE)
@@ -993,6 +997,33 @@ def where(path: str, db: str = DB_OPT) -> None:
             t["agent"], t["project_scope"], t["op"], t["tool"] or "-",
         )
     console.print(table)
+
+
+DEFAULT_TRANSCRIPT_GLOB = "~/.claude/projects/**/*.jsonl"
+
+
+@app.command(rich_help_panel=ACTIVITY)
+def backfill(
+    pattern: str = typer.Option(DEFAULT_TRANSCRIPT_GLOB, "--glob",
+                                help="Transcripts to replay"),
+    agent: str = typer.Option("claude-code", "--agent", help="Which agent wrote them"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be ingested"),
+    db: str = DB_OPT,
+) -> None:
+    """Replay transcripts already on disk into the activity ledger.
+
+    A parse, not an extraction: no model call, no queued job, no tokens. It is
+    what makes "where did I leave off" answerable on a machine whose history
+    predates the ledger, and it is safe to run again — a session already
+    recorded is left alone, while transcripts written since are picked up.
+    """
+    from .backfill import backfill_directory, would_backfill
+
+    ledger = _ledger(db)
+    if dry_run:
+        console.print(f"{would_backfill(ledger, pattern)} session(s) would be ingested")
+        return
+    console.print(f"{backfill_directory(ledger, pattern, agent=agent)} session(s) ingested")
 
 
 @app.command(rich_help_panel=ACTIVITY)

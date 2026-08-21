@@ -14,6 +14,7 @@ the split was noticed.
 from __future__ import annotations
 
 import glob
+import os
 from pathlib import Path
 
 from .activity import ActivityLedger
@@ -36,9 +37,9 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
     """
     lines = read_lines(path)
     meta = session_meta_from(lines)
-    session_id = meta["session_id"]
-    if session_id is None or ledger.get_session(session_id) is not None:
+    if _unseen_session_id(ledger, meta) is None:
         return None
+    session_id = meta["session_id"]
 
     row_id = ledger.start_session(
         agent=agent,
@@ -54,11 +55,55 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
     return row_id
 
 
+def transcripts_matching(glob_pattern: str) -> list[str]:
+    """Every file the pattern names, oldest path first.
+
+    `recursive=True` because the directory this runs against in practice is
+    `~/.claude/projects/**/*.jsonl`, where the transcripts sit one directory
+    per project — without it `**` collapses to a single level and the pattern
+    silently answers for only part of the tree.
+    """
+    return sorted(glob.glob(os.path.expanduser(glob_pattern), recursive=True))
+
+
+def would_backfill(ledger: ActivityLedger, glob_pattern: str) -> int:
+    """How many sessions a run would newly ingest, writing nothing.
+
+    A real run here is 198 files and 326MB; being able to see what it would
+    do before it does it is what makes it a command someone runs.
+    """
+    return sum(
+        1 for path in transcripts_matching(glob_pattern)
+        if _unseen_session_id(ledger, session_meta_from(read_lines(path))) is not None
+    )
+
+
+def _unseen_session_id(ledger: ActivityLedger, meta: dict) -> str | None:
+    """The session id this transcript would add, or `None` if it adds nothing.
+
+    One rule, read by both the run and the preview, so what `--dry-run`
+    counts and what a run ingests cannot drift apart.
+    """
+    session_id = meta["session_id"]
+    if session_id is None or ledger.get_session(session_id) is not None:
+        return None
+    return session_id
+
+
 def backfill_directory(ledger: ActivityLedger, glob_pattern: str, *, agent: str) -> int:
     """Backfill every transcript matching `glob_pattern`. Returns the count of
-    sessions newly ingested (already-backfilled transcripts are not counted)."""
+    sessions newly ingested (already-backfilled transcripts are not counted).
+
+    A directory of real transcripts contains truncated files, half-written
+    lines and at least one thing that is not JSON, so a transcript that cannot
+    be replayed ends its own file and nothing else: stopping on the first one
+    would make this work only on a machine that does not need it.
+    """
     count = 0
-    for path in sorted(glob.glob(glob_pattern)):
-        if backfill_transcript(ledger, path, agent=agent) is not None:
-            count += 1
+    for path in transcripts_matching(glob_pattern):
+        try:
+            if backfill_transcript(ledger, path, agent=agent) is not None:
+                count += 1
+        except Exception:  # noqa: BLE001 — one bad transcript, not a lost run
+            continue
     return count
