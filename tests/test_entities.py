@@ -74,7 +74,6 @@ e1 = pytest.mark.xfail(strict=True, reason="E1 not implemented yet: remove when 
 e2 = pytest.mark.xfail(strict=True, reason="E2 not implemented yet: remove when it lands")
 e3 = pytest.mark.xfail(strict=True, reason="E3 not implemented yet: remove when it lands")
 e4 = pytest.mark.xfail(strict=True, reason="E4 not implemented yet: remove when it lands")
-e9 = pytest.mark.xfail(strict=True, reason="E9 not implemented yet: remove when it lands")
 
 DAY = 86400.0
 SCOPE = "repo:backend@aaaaaaaa"
@@ -1109,7 +1108,6 @@ def _surfaced(store, graph, *, fact, entity, session_id, outcome):
     store.ledger.grade(recall_id, getattr(Outcome, outcome.upper()), source="observer")
 
 
-@e9
 def test_an_edge_that_surfaces_good_facts_gains_weight(store, graph):
     """The entity-layer counterpart of G10: traversal learns which relations
     actually carry useful memory."""
@@ -1129,7 +1127,6 @@ def test_an_edge_that_surfaces_good_facts_gains_weight(store, graph):
     assert _edge(store.conn, anchor.id, useful.id, "touched_with")["weight"] > before
 
 
-@e9
 def test_an_edge_that_surfaces_unused_facts_gains_nothing(store, graph):
     from nenapu import entities
 
@@ -1147,7 +1144,6 @@ def test_an_edge_that_surfaces_unused_facts_gains_nothing(store, graph):
     assert _edge(store.conn, anchor.id, quiet.id, "touched_with")["weight"] == before
 
 
-@e9
 def test_a_misleading_fact_does_not_raise_the_edge_that_surfaced_it(store, graph):
     from nenapu import entities
 
@@ -1163,7 +1159,6 @@ def test_a_misleading_fact_does_not_raise_the_edge_that_surfaced_it(store, graph
     assert _edge(store.conn, anchor.id, wrong.id, "touched_with")["weight"] <= before
 
 
-@e9
 def test_weights_are_bounded(store, graph):
     """Without bounding, an edge that surfaced one good fact attracts more
     traffic, earns more grades, and crowds out the rest — which is the whole
@@ -1183,7 +1178,6 @@ def test_weights_are_bounded(store, graph):
     assert _edge(store.conn, anchor.id, hot.id, "touched_with")["weight"] <= MAX_EDGE_WEIGHT
 
 
-@e9
 def test_a_store_with_no_grades_leaves_every_weight_alone(store, graph):
     from nenapu import entities
 
@@ -1197,7 +1191,6 @@ def test_a_store_with_no_grades_leaves_every_weight_alone(store, graph):
     assert [dict(r) for r in store.conn.execute("SELECT * FROM entity_edges")] == before
 
 
-@e9
 def test_rewarding_is_idempotent_per_grade(store, graph):
     """A maintenance tick that runs hourly must not pay for the same grade
     every hour."""

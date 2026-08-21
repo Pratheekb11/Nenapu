@@ -712,3 +712,96 @@ def resolve_aliases(store, *, scope: str | None = None, backend=None) -> int:
     if backend is not None:
         linked += _model_aliases(store, graph, rows, backend)
     return linked
+
+
+# ---------- E9 · edge weights learn from grades ----------
+#
+# The grading loop closing back into the entity graph, and the counterpart of
+# G10 one tier up: an edge that keeps carrying memory a session actually used
+# is worth traversing, and one that keeps carrying memory nobody touched is
+# not.
+#
+# It is a feedback loop, which is what makes it a design problem rather than a
+# counter. An edge that surfaced one good fact attracts more traffic, earns
+# more grades, and would crowd out the rest. Two things hold that down: every
+# step moves a fraction of the distance to a ceiling, so weight approaches
+# `MAX_EDGE_WEIGHT` and never reaches it, and each grade is paid for exactly
+# once however often maintenance runs.
+
+MAX_EDGE_WEIGHT = 5.0
+MIN_EDGE_WEIGHT = 0.1
+
+# A fraction of the remaining distance, not a fixed step: the first good
+# recall through a cold edge moves it a lot, the fiftieth barely at all.
+EDGE_REWARD_RATE = 0.1
+EDGE_PENALTY_RATE = 0.1
+
+# One journal row per rewarded recall. The journal is already the store's
+# record of what happened, and reusing it keeps "have I paid for this grade"
+# answerable without a second bookkeeping table to keep in step.
+EDGE_REWARD_ACTION = "edge_reward"
+
+
+def _already_rewarded(conn: sqlite3.Connection) -> set[str]:
+    return {r["detail"] for r in conn.execute(
+        "SELECT detail FROM journal WHERE action = ?", (EDGE_REWARD_ACTION,)
+    )}
+
+
+def _graded_recalls_for_edges(conn: sqlite3.Connection) -> list:
+    """Graded recalls of facts that are attached to an entity.
+
+    Neutral is left out on purpose: "was in context and never came up" is the
+    absence of evidence about the edge, not evidence against it.
+    """
+    return conn.execute(
+        "SELECT r.id, r.fact_id, r.outcome FROM recalls r"
+        " WHERE r.outcome IN ('good', 'bad')"
+        " AND EXISTS (SELECT 1 FROM fact_entities fe WHERE fe.fact_id = r.fact_id)"
+        " ORDER BY r.id"
+    ).fetchall()
+
+
+def _adjust(weight: float, outcome: str) -> float:
+    if outcome == "good":
+        return weight + EDGE_REWARD_RATE * (MAX_EDGE_WEIGHT - weight)
+    return weight - EDGE_PENALTY_RATE * (weight - MIN_EDGE_WEIGHT)
+
+
+def reward_edges_for_grades(store) -> int:
+    """Move the weight of the edges that surfaced graded facts. Returns the
+    number of grades paid for.
+
+    A store with no grades is left exactly as it was — every weight, every
+    observation count, every row.
+    """
+    conn = store.conn
+    rewarded = _already_rewarded(conn)
+    paid = 0
+    for recall in _graded_recalls_for_edges(conn):
+        if str(recall["id"]) in rewarded:
+            continue
+        entity_ids = [r["entity_id"] for r in conn.execute(
+            "SELECT entity_id FROM fact_entities WHERE fact_id = ?", (recall["fact_id"],)
+        )]
+        if not entity_ids:
+            continue
+        marks = ",".join("?" * len(entity_ids))
+        edges = conn.execute(
+            f"SELECT id, weight FROM entity_edges WHERE valid_to IS NULL"
+            f" AND (src_id IN ({marks}) OR dst_id IN ({marks}))",
+            [*entity_ids, *entity_ids],
+        ).fetchall()
+        with transaction(conn):
+            for edge in edges:
+                conn.execute(
+                    "UPDATE entity_edges SET weight = ? WHERE id = ?",
+                    (_adjust(edge["weight"], recall["outcome"]), edge["id"]),
+                )
+            conn.execute(
+                "INSERT INTO journal(action, actor, detail, created_at) VALUES (?,?,?,?)",
+                (EDGE_REWARD_ACTION, "entities", str(recall["id"]), now()),
+            )
+            commit(conn)
+        paid += 1
+    return paid

@@ -26,6 +26,7 @@ from .activity import ActivityLedger
 from .audit import audit as run_audit
 from .db import commit
 from .distill import dedupe
+from .entities import reward_edges_for_grades
 from .loops import LoopBook
 from .models import now
 from .rollup import rollup_activity
@@ -80,6 +81,11 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     # because evidence for a loop can land in a session the worker did not
     # just ingest.
     LoopBook(store.conn).close_satisfied(ActivityLedger(store.conn))
+
+    # Fold new grades into the entity graph's edge weights. Also cheap and
+    # also unscoped, and each grade is paid for exactly once however often
+    # this runs, so an hourly tick does not compound a single good recall.
+    reward_edges_for_grades(store)
 
     # Ageing the work log, on its own cadence. Unscoped for the same reason
     # loop closure is: a worker that just drained a session in one project
