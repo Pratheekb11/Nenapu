@@ -898,16 +898,89 @@ def misled(recall_id: int, note: str = "", db: str = DB_OPT) -> None:
         console.print("[dim]already graded[/]")
 
 
+# G6 · replaying the backlog.
+#
+# Grading only ever runs at the end of a session, so a store that accumulated
+# pending recalls before the grader existed answers the retrieval gate in two
+# weeks rather than today. Replay reads those sessions' transcripts off disk
+# and puts them through the same extraction, under their own grade source.
+
+TRANSCRIPTS_ROOT = Path("~/.claude/projects")
+REPLAY_GRADE_SOURCE = "observer-replay"
+
+
+def _sessions_with_pending_recalls(store, since_days: float | None) -> list[str]:
+    sql = ("SELECT session_id, MAX(created_at) AS last_at FROM recalls"
+           " WHERE outcome = 'pending' AND session_id IS NOT NULL")
+    args: list = []
+    if since_days:
+        sql += " AND created_at >= ?"
+        args.append(now() - since_days * 86400.0)
+    sql += " GROUP BY session_id ORDER BY last_at DESC"
+    return [r["session_id"] for r in store.conn.execute(sql, args)]
+
+
+def replay_pending_sessions(
+    store,
+    *,
+    since_days: float | None = None,
+    transcripts_root: Path | str | None = None,
+    db: str | None = None,
+) -> list[str]:
+    """Queue an extraction for every session that still has pending recalls.
+
+    Queued rather than run inline, and deliberately through the same ingest
+    queue: eighteen transcripts drain serially through the one worker holding
+    the lock, instead of fanning out eighteen concurrent model calls at one
+    store. `enqueue_once` dedupes unfinished work and `Ledger.grade` is
+    first-grade-wins, so replaying twice is a no-op rather than a second pass.
+
+    Returns the session ids queued. Spawning the worker is the caller's job:
+    this function only decides what needs reading.
+    """
+    from .ingest_queue import enqueue_once
+
+    root = Path(transcripts_root) if transcripts_root else TRANSCRIPTS_ROOT.expanduser()
+    # Transcripts are named for the session that wrote them, which is the only
+    # thing tying a recall row back to a file on disk. A session whose
+    # transcript is gone is not an error; it is a session that cannot be
+    # replayed.
+    on_disk = {path.stem: path for path in root.glob("*/*.jsonl")}
+
+    queued: list[str] = []
+    for session_id in _sessions_with_pending_recalls(store, since_days):
+        path = on_disk.get(session_id)
+        if path is None:
+            continue
+        if enqueue_once(store.conn, path=str(path), agent="claude-code",
+                        session_id=session_id,
+                        grade_source=REPLAY_GRADE_SOURCE) is not None:
+            queued.append(session_id)
+    return queued
+
+
 @app.command("grade", rich_help_panel=OUTCOMES)
 @alias("outcome", OUTCOMES)
 def grade(
-    session_id: str,
-    success: bool = typer.Option(..., "--success/--failure"),
+    session_id: str = typer.Argument("", help="Session to grade in one call"),
+    success: bool = typer.Option(None, "--success/--failure"),
+    replay: bool = typer.Option(False, "--replay",
+                                help="Grade the backlog from transcripts on disk"),
+    since: float = typer.Option(0, "--since", help="With --replay: only the last N days"),
     note: str = "",
     db: str = DB_OPT,
 ) -> None:
     """Grade every memory a task used, in one call."""
     store, _ = _stores(db)
+    if replay:
+        sessions = replay_pending_sessions(store, since_days=since or None, db=db)
+        if sessions:
+            _spawn_worker(db)
+        console.print(f"queued {len(sessions)} session(s) for grading")
+        return
+
+    if not session_id or success is None:
+        raise typer.BadParameter("give a session id with --success/--failure, or use --replay")
     graded = store.ledger.grade_session(
         session_id, "good" if success else "bad", source="agent", note=note or None
     )

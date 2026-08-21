@@ -26,12 +26,13 @@ STATE_FAILED = "failed"
 
 def enqueue(
     conn: sqlite3.Connection, *, path: str, agent: str, session_id: str | None = None,
+    grade_source: str | None = None,
 ) -> int:
     with transaction(conn):
         cur = conn.execute(
-            "INSERT INTO ingest_queue(path, agent, session_id, enqueued_at, state)"
-            " VALUES (?,?,?,?,?)",
-            (path, agent, session_id, now(), STATE_PENDING),
+            "INSERT INTO ingest_queue(path, agent, session_id, enqueued_at, state,"
+            " grade_source) VALUES (?,?,?,?,?,?)",
+            (path, agent, session_id, now(), STATE_PENDING, grade_source),
         )
         commit(conn)
         return cur.lastrowid
@@ -39,6 +40,7 @@ def enqueue(
 
 def enqueue_once(
     conn: sqlite3.Connection, *, path: str, agent: str, session_id: str | None = None,
+    grade_source: str | None = None,
 ) -> int | None:
     """Enqueue unless this transcript is already waiting. Returns the new id.
 
@@ -56,7 +58,8 @@ def enqueue_once(
         ).fetchone()
         if waiting is not None:
             return None
-        return enqueue(conn, path=path, agent=agent, session_id=session_id)
+        return enqueue(conn, path=path, agent=agent, session_id=session_id,
+                       grade_source=grade_source)
 
 
 def has_pending(conn: sqlite3.Connection) -> bool:

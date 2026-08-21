@@ -70,7 +70,6 @@ from nenapu.llm import LLMUnavailable
 from nenapu.models import Fact, Outcome
 from nenapu.store import Store
 
-g6 = pytest.mark.xfail(strict=True, reason="G6 not implemented yet: remove when it lands")
 
 DAY = 86400.0
 
@@ -583,7 +582,6 @@ def _queued(store):
     return [dict(r) for r in store.conn.execute("SELECT * FROM ingest_queue")]
 
 
-@g6
 def test_replay_queues_every_session_that_still_has_pending_recalls(store, tmp_path):
     """Reuses the ingest queue on purpose: 18 extractions drain serially
     through the one worker holding the lock, rather than fanning out 18
@@ -600,7 +598,6 @@ def test_replay_queues_every_session_that_still_has_pending_recalls(store, tmp_p
     assert len(_queued(store)) == 2
 
 
-@g6
 def test_a_session_whose_transcript_is_gone_is_skipped(store, tmp_path):
     """18 of the 20 sessions have a transcript on disk. The other two are not
     an error, they are two sessions that cannot be replayed."""
@@ -615,7 +612,6 @@ def test_a_session_whose_transcript_is_gone_is_skipped(store, tmp_path):
     assert queued == ["s-a"]
 
 
-@g6
 def test_a_session_with_nothing_pending_is_not_replayed(store, tmp_path):
     """Replay is for the backlog. Re-reading a session whose recalls are all
     graded buys an 83-second call for no new evidence."""
@@ -628,7 +624,6 @@ def test_a_session_with_nothing_pending_is_not_replayed(store, tmp_path):
     assert replay_pending_sessions(store, transcripts_root=root) == []
 
 
-@g6
 def test_replaying_twice_changes_nothing_the_second_time(store, tmp_path):
     """`enqueue_once` dedupes unfinished work and `Ledger.grade`'s
     first-grade-wins covers the rest, so a repeat replay is a no-op rather
@@ -645,7 +640,6 @@ def test_replaying_twice_changes_nothing_the_second_time(store, tmp_path):
     assert _queued(store) == before
 
 
-@g6
 def test_since_bounds_which_sessions_are_picked_up(store, tmp_path):
     from nenapu.cli import replay_pending_sessions
 
@@ -675,7 +669,6 @@ def test_a_replayed_grade_is_distinguishable_from_a_live_one(store, tmp_path, mo
     assert _outcomes(store) == [(Outcome.GOOD, "observer-replay")]
 
 
-@g6
 def test_the_replay_flag_is_registered_on_grade():
     """`nenapu grade --replay` rather than a new command: it is the same
     question the OUTCOMES panel already answers, asked over the backlog."""
@@ -687,7 +680,6 @@ def test_the_replay_flag_is_registered_on_grade():
     assert "replay" in source
 
 
-@g6
 def test_the_replay_run_is_a_registered_command_path(tmp_path):
     db = tmp_path / "s.db"
     Store(connect(str(db)))

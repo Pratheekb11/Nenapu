@@ -265,7 +265,11 @@ CREATE TABLE IF NOT EXISTS ingest_queue (
     state       TEXT NOT NULL DEFAULT 'pending',  -- pending | claimed | done | failed
     claimed_at  REAL,
     finished_at REAL,
-    detail      TEXT
+    detail      TEXT,
+    -- Which source a grade from this job is recorded under. Null is a live
+    -- session; `grade --replay` sets it so backfilled evidence stays
+    -- distinguishable from evidence that arrived as the sessions ran.
+    grade_source TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_queue_state ON ingest_queue(state, enqueued_at);
@@ -530,6 +534,9 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("suspect_reason", "TEXT"),
         ("agent", "TEXT"),
         ("occurrences", "INTEGER NOT NULL DEFAULT 1"),
+    ],
+    "ingest_queue": [
+        ("grade_source", "TEXT"),
     ],
 }
 

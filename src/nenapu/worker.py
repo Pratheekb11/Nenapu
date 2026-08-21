@@ -115,8 +115,12 @@ def _ingest(store: Store, job: dict) -> str:
     # Read the transcript with the parser belonging to the agent that wrote
     # it: a Codex rollout read by Claude Code's parser yields an empty
     # conversation, which looks exactly like a session that taught nothing.
+    # A replayed job grades under its own source, so an audit can tell
+    # backfilled evidence from evidence that arrived as the sessions ran.
+    grade_source = job.get("grade_source")
     observe_transcript(
         store, transcript, session_id=session_id, scope=scope, cwd=cwd,
         parse=parser_for(job["agent"]),
+        **({"grade_source": grade_source} if grade_source else {}),
     )
     return scope
