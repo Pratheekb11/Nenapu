@@ -14,8 +14,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .activity import ActivityLedger
-from .capture import capture_session
-from .ingest_queue import WorkerLock, claim_next, mark_done, mark_failed
+from .capture import capture_session, read_lines, session_meta_from
+from .ingest_queue import WorkerLock, claim_next, has_pending, mark_done, mark_failed
 from .loops import LoopBook
 from .maintenance import run_maintenance_tick
 from .observer import observe_transcript
@@ -54,18 +54,26 @@ def drain(store: Store, *, lock_path: str | Path | None = None, limit: int = 20)
     processed = 0
     touched: set[str] = set()
     try:
-        while processed < limit:
-            job = claim_next(store.conn)
-            if job is None:
-                break
-            try:
-                touched.add(_ingest(store, job))
-                mark_done(store.conn, job["id"])
-            except Exception as exc:  # noqa: BLE001 — one bad job, not a stuck queue
-                mark_failed(store.conn, job["id"], detail=str(exc)[:200])
-            processed += 1
+        while True:
+            while processed < limit:
+                job = claim_next(store.conn)
+                if job is None:
+                    break
+                try:
+                    touched.add(_ingest(store, job))
+                    mark_done(store.conn, job["id"])
+                except Exception as exc:  # noqa: BLE001 — one bad job, not a stuck queue
+                    mark_failed(store.conn, job["id"], detail=str(exc)[:200])
+                processed += 1
 
-        run_maintenance_tick(store, touched_scopes=sorted(s for s in touched if s))
+            run_maintenance_tick(store, touched_scopes=sorted(s for s in touched if s))
+            # Upkeep runs inside the lock and can take minutes when an audit
+            # or a check is due. A hook firing in that window enqueues fine
+            # and spawns a worker that finds the lock taken and returns, so
+            # this worker has to look at the queue once more before letting
+            # go — otherwise that job waits for an unrelated later trigger.
+            if processed >= limit or not has_pending(store.conn):
+                break
     finally:
         lock.release()
     return processed
@@ -85,14 +93,30 @@ def _ingest(store: Store, job: dict) -> str:
         LoopBook(store.conn).detect_interrupted(ledger, row_id)
 
     session = ledger.get_session(row_id) if row_id is not None else None
+    if session is None:
+        # `capture_session` returns None for a session it has already
+        # recorded — a resume, or a retry after the extraction failed, since
+        # the session row is ended before the model is called. The row still
+        # holds the cwd and the scope, so look it up by the id the job
+        # carries, or by the one the transcript names when the watcher
+        # queued this without an id. Falling through to `global` here would
+        # store a project's facts where every other project recalls them.
+        external_id = (job["session_id"]
+                       or session_meta_from(read_lines(transcript))["session_id"])
+        session = ledger.get_session(external_id) if external_id else None
+
     cwd = session["cwd"] if session else None
     scope = session["project_scope"] if session else (project_scope(cwd) if cwd else "global")
+    # The watcher enqueues with no session id, and a fact stored without one
+    # gets no inferred edges — `Graph.infer_edges_for` returns nothing on a
+    # null session — so the whole watcher path would build no graph at all.
+    session_id = job["session_id"] or (session["external_id"] if session else None)
 
     # Read the transcript with the parser belonging to the agent that wrote
     # it: a Codex rollout read by Claude Code's parser yields an empty
     # conversation, which looks exactly like a session that taught nothing.
     observe_transcript(
-        store, transcript, session_id=job["session_id"], scope=scope, cwd=cwd,
+        store, transcript, session_id=session_id, scope=scope, cwd=cwd,
         parse=parser_for(job["agent"]),
     )
     return scope

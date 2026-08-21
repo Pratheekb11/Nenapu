@@ -59,6 +59,19 @@ def enqueue_once(
         return enqueue(conn, path=path, agent=agent, session_id=session_id)
 
 
+def has_pending(conn: sqlite3.Connection) -> bool:
+    """Is there work waiting? A look, not a claim.
+
+    The draining worker uses this to decide whether to go round again before
+    releasing `WorkerLock`; claiming a job just to find out would leave it
+    claimed by a worker that has decided to stop.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM ingest_queue WHERE state = ? LIMIT 1", (STATE_PENDING,)
+    ).fetchone()
+    return row is not None
+
+
 def claim_next(conn: sqlite3.Connection) -> dict | None:
     """Atomically claim the oldest pending job, so two workers racing on the
     same store cannot both come away with it."""
