@@ -134,6 +134,28 @@ class Ledger:
         ).fetchall()
         return sum(1 for r in rows if self.grade(r["id"], Outcome.BAD, source=source, note=note))
 
+    def blame_session_recalls(
+        self, fact_id: int, session_id: str | None, *, source: str, note: str,
+    ) -> int:
+        """This fact just turned out to be wrong; blame that session's own recalls.
+
+        `blame_recent_recalls` reaches back a fixed 6h window, which a
+        SessionStart injection outruns in any session longer than that — the
+        correction signal misses its own session. Here the session id is the
+        only guard, in place of a window: every pending recall of this fact
+        logged under that session, however old, is blamed. A missing session
+        id grades nothing, never "every pending recall of this fact" — a
+        write outside a session, or a retire from the CLI, has no session to
+        implicate.
+        """
+        if not session_id:
+            return 0
+        rows = self.conn.execute(
+            "SELECT id FROM recalls WHERE fact_id = ? AND session_id = ? AND outcome = ?",
+            (fact_id, session_id, Outcome.PENDING),
+        ).fetchall()
+        return sum(1 for r in rows if self.grade(r["id"], Outcome.BAD, source=source, note=note))
+
     def credit_recent_recalls(
         self, fact_id: int, *, source: str, note: str, window: float = IMPLICIT_WINDOW_SECONDS
     ) -> int:

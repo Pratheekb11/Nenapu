@@ -353,6 +353,12 @@ class Store:
             self.ledger.blame_recent_recalls(
                 old.id, source="correction", note=f"superseded by #{new.id}"
             )
+            # The 6h window above misses a recall injected at session start
+            # into a session that ran longer than that. The session doing the
+            # superseding is read straight off the new fact, no window needed.
+            self.ledger.blame_session_recalls(
+                old.id, new.session_id, source="correction", note=f"superseded by #{new.id}"
+            )
             self.graph.cascade_falsification(old.id, "superseded")
             resolution = "superseded"
         else:
@@ -466,7 +472,8 @@ class Store:
         self._journal("soft_verify", fact_id=fact_id, actor=actor)
         commit(self.conn)
 
-    def set_status(self, fact_id: int, status: str, *, actor: str = "agent") -> None:
+    def set_status(self, fact_id: int, status: str, *, actor: str = "agent",
+                   session_id: str | None = None) -> None:
         self.conn.execute(
             "UPDATE facts SET status = ?, updated_at = ? WHERE id = ?", (status, now(), fact_id)
         )
@@ -478,6 +485,11 @@ class Store:
             if status == Status.RETIRED:
                 self.ledger.blame_recent_recalls(
                     fact_id, source="correction", note="fact retired"
+                )
+                # A retire has no superseding fact to read a session off, so
+                # the caller passes it explicitly when one applies.
+                self.ledger.blame_session_recalls(
+                    fact_id, session_id, source="correction", note="fact retired"
                 )
 
     def forget(self, fact_id: int, *, actor: str = "user") -> None:

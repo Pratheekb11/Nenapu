@@ -3,7 +3,7 @@
 import pytest
 
 from nenapu import connect
-from nenapu.models import Fact, Origin, Outcome
+from nenapu.models import Fact, Origin, Outcome, Status
 from nenapu.outcomes import outcome_signal
 from nenapu.store import Store, effective_confidence
 from nenapu.verify import apply_result, run_check
@@ -156,3 +156,177 @@ def test_repeated_soft_confirmation_still_fades(store, approve_all):
         scores.append(store.get(fact.id).confidence)
     assert scores == sorted(scores, reverse=True)   # monotonically down
     assert scores[-1] < scores[0]
+
+
+# ==========================================================================
+# Pre-written for G3 · session-scoped blame.
+#
+# Requirement: `blame_recent_recalls` reaches back `IMPLICIT_WINDOW_SECONDS`
+# (6h). A SessionStart injection happens at minute zero of a session that may
+# run far longer than that, so the correction signal misses its own session.
+#
+#     Ledger.blame_session_recalls(fact_id, session_id, *, source, note)
+#
+# grades that session's pending recalls of that fact `bad` with no window, and
+# is called alongside the existing `blame_recent_recalls` from `_resolve`
+# (supersede) and `set_status` (retire).
+#
+# Assumed seam: `set_status` grows an optional `session_id`, since a retire
+# has no superseding fact to read a session off. `_resolve` reads it from the
+# fact doing the superseding.
+# ==========================================================================
+
+g3 = pytest.mark.xfail(strict=True, reason="G3 not implemented yet: remove when it lands")
+
+EIGHT_HOURS = 8 * 3600.0
+
+
+def _aged_recall(store, fact_id, *, session_id, age_seconds):
+    """A recall logged `age_seconds` ago — a session-start injection into a
+    session that then ran for the rest of the working day."""
+    import time
+
+    recall_id = store.ledger.log(fact_id, session_id=session_id)
+    store.conn.execute(
+        "UPDATE recalls SET created_at = ? WHERE id = ?",
+        (time.time() - age_seconds, recall_id),
+    )
+    store.conn.commit()
+    return recall_id
+
+
+def test_the_six_hour_window_really_does_miss_its_own_session(store):
+    """The fault, pinned before the fix so the fix has something to be
+    measured against. Not marked pending: this is today's behaviour."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    recall_id = _aged_recall(store, fact.id, session_id="s-long", age_seconds=EIGHT_HOURS)
+
+    graded = store.ledger.blame_recent_recalls(fact.id, source="correction", note="x")
+
+    assert graded == 0
+    assert store.ledger.get(recall_id).outcome == Outcome.PENDING
+
+
+def test_a_session_start_injection_is_blamed_eight_hours_later(store):
+    """The whole point: the fact was injected at minute zero, acted on all
+    day, and corrected at hour eight. That correction is about that recall."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    recall_id = _aged_recall(store, fact.id, session_id="s-long", age_seconds=EIGHT_HOURS)
+
+    graded = store.ledger.blame_session_recalls(
+        fact.id, "s-long", source="correction", note="superseded"
+    )
+
+    assert graded == 1
+    assert store.ledger.get(recall_id).outcome == Outcome.BAD
+
+
+def test_blame_is_scoped_to_the_session_that_did_the_correcting(store):
+    """No window means no other guard, so the session id is the guard. A
+    recall in somebody else's session is not evidence about this correction."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    mine = _aged_recall(store, fact.id, session_id="s-mine", age_seconds=EIGHT_HOURS)
+    theirs = _aged_recall(store, fact.id, session_id="s-theirs", age_seconds=EIGHT_HOURS)
+
+    store.ledger.blame_session_recalls(fact.id, "s-mine", source="correction", note="x")
+
+    assert store.ledger.get(mine).outcome == Outcome.BAD
+    assert store.ledger.get(theirs).outcome == Outcome.PENDING
+
+
+def test_only_recalls_of_that_fact_are_blamed(store):
+    """A session recalls a dozen facts. One of them turned out wrong; the
+    other eleven are not implicated by it."""
+    from nenapu.models import Outcome
+
+    wrong, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    other, _ = store.write(Fact(text="deploys run from main", key="deploy.branch"))
+    wrong_recall = _aged_recall(store, wrong.id, session_id="s", age_seconds=EIGHT_HOURS)
+    other_recall = _aged_recall(store, other.id, session_id="s", age_seconds=EIGHT_HOURS)
+
+    store.ledger.blame_session_recalls(wrong.id, "s", source="correction", note="x")
+
+    assert store.ledger.get(wrong_recall).outcome == Outcome.BAD
+    assert store.ledger.get(other_recall).outcome == Outcome.PENDING
+
+
+def test_the_first_grade_still_wins(store):
+    """`Ledger.grade`'s single-statement pending check is reused rather than
+    re-implemented, so an explicit human verdict is not overwritten by the
+    implicit signal that arrives later."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    recall_id = _aged_recall(store, fact.id, session_id="s", age_seconds=EIGHT_HOURS)
+    store.ledger.grade(recall_id, Outcome.GOOD, source="human")
+
+    graded = store.ledger.blame_session_recalls(fact.id, "s", source="correction", note="x")
+
+    assert graded == 0
+    assert store.ledger.get(recall_id).outcome == Outcome.GOOD
+    assert store.ledger.get(recall_id).outcome_source == "human"
+
+
+def test_a_missing_session_id_grades_nothing(store):
+    """Every call site has a session id that can be absent — a fact written
+    outside a session, a retire from the CLI. Absent must mean "no implicit
+    signal", never "every pending recall of this fact"."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    recall_id = _aged_recall(store, fact.id, session_id="s", age_seconds=EIGHT_HOURS)
+
+    assert store.ledger.blame_session_recalls(fact.id, None, source="correction",
+                                              note="x") == 0
+    assert store.ledger.get(recall_id).outcome == Outcome.PENDING
+
+
+def test_superseding_a_fact_blames_its_own_session(store):
+    """Call site one: `Store._resolve`. The fact recalled at session start and
+    contradicted eight hours later is graded from the same write that
+    supersedes it, with no hook and no harness cooperation."""
+    from nenapu.models import Outcome
+
+    old, _ = store.write(Fact(text="the staging host is box-7", key="staging.host",
+                              origin=Origin.AGENT_INFERRED, confidence=0.6))
+    recall_id = _aged_recall(store, old.id, session_id="s-long", age_seconds=EIGHT_HOURS)
+
+    store.write(Fact(text="the staging host is box-9", key="staging.host",
+                     origin=Origin.USER_STATED, confidence=0.95, session_id="s-long"))
+
+    assert store.get(old.id).status == Status.SUPERSEDED
+    assert store.ledger.get(recall_id).outcome == Outcome.BAD
+
+
+def test_retiring_a_fact_blames_its_own_session(store):
+    """Call site two: `Store.set_status` on a retire. A human saying "forget
+    that" is the same evidence about the same recall, arriving by hand."""
+    from nenapu.models import Outcome
+
+    fact, _ = store.write(Fact(text="the staging host is box-7", key="staging.host"))
+    recall_id = _aged_recall(store, fact.id, session_id="s-long", age_seconds=EIGHT_HOURS)
+
+    store.set_status(fact.id, Status.RETIRED, session_id="s-long")
+
+    assert store.ledger.get(recall_id).outcome == Outcome.BAD
+
+
+def test_the_recent_window_signal_is_not_removed(store):
+    """Added alongside, not instead of: a correction with no session id
+    attached still reaches the recalls the 6h window covers."""
+    from nenapu.models import Outcome
+
+    old, _ = store.write(Fact(text="the port is 8080", key="app.port",
+                              origin=Origin.AGENT_INFERRED, confidence=0.6))
+    recent = store.ledger.log(old.id, session_id="s-other")
+
+    store.write(Fact(text="the port is 9090", key="app.port",
+                     origin=Origin.USER_STATED, confidence=0.95))
+
+    assert store.ledger.get(recent).outcome == Outcome.BAD
