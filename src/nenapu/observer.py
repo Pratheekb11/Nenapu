@@ -59,13 +59,33 @@ MAX_TAIL_BYTES = 24_000_000
 MAX_CONVERSATION_CHARS = 24_000
 
 MAX_INJECTED = 12
-# Per-section caps for the project block. A refactor session can touch two
+# Per-section ceilings for the project block. A refactor session can touch two
 # hundred files and a neglected project can hold fifty loops; either would
 # spend the whole context budget on one section of a block that is paid for on
-# every request.
+# every request. These bound a single runaway section; the token budget below
+# is what bounds the block.
 MAX_LEFT_OFF_FILES = 6
 MAX_OPEN_LOOPS = 5
 MAX_CHANGED = 8
+
+# R3: the real unit. Every cap above is a count, and a count is the wrong unit
+# for something prepended to every session and paid for on every request:
+# twelve facts is 200 tokens or 2000 depending on what got written. Measured
+# against the live store, where the block came to 841 tokens on 2026-08-22
+# while the gate reported 84% of injected facts unused.
+INJECTION_TOKEN_BUDGET = 700
+
+# Sections in the order they are paid for, which is not the order they are
+# printed in. A correction the user has repeated is the most actionable line
+# in the block, and a list of files that changed while they were away is the
+# most disposable, so a refactor that touched two hundred files must not be
+# the reason a correction falls out.
+INJECTION_PRIORITY = ("corrections", "falsified", "left_off", "loops", "known", "changed")
+
+# The order a reader sees. Unchanged: the ledger sections, then what is
+# believed, then what is not.
+INJECTION_RENDER_ORDER = ("left_off", "loops", "changed", "corrections", "known",
+                          "falsified")
 # What the extractor is shown of the store before it reads the session. The
 # extraction already runs at thousands of tokens against an 83-second call, so
 # this is a fixed budget rather than something that grows with the store.
@@ -891,9 +911,87 @@ def _changed_section(ledger, scope: str, cwd: str | None) -> list[str]:
     return lines
 
 
+class _Section:
+    """One block of the injection: a heading, its lines, and the facts behind
+    them, so that what is logged as recalled is what actually got printed."""
+
+    def __init__(self, key: str, lines: list[str], facts: list[Fact] | None = None) -> None:
+        self.key = key
+        self.lines = lines
+        self.facts = facts or []
+
+    def __bool__(self) -> bool:
+        return bool(self.lines)
+
+
+_TRUNCATION_MARK = " …"
+
+
+def _token_estimate(text: str) -> int:
+    """Chars over four, the same estimate `nenapu cost` reports at.
+
+    An approximation on purpose: an exact count needs the provider's
+    tokenizer, and a budget that cannot be computed without a network call is
+    not a budget a SessionStart hook can keep.
+    """
+    return len(text) // 4
+
+
+def _truncate_to(line: str, tokens: int) -> str:
+    """Cut a line to fit, marked so a reader can see something was removed."""
+    keep = max(tokens * 4 - len(_TRUNCATION_MARK), 0)
+    return line[:keep].rstrip() + _TRUNCATION_MARK
+
+
+def _fit(sections: dict[str, _Section], spent: int, budget: int) -> dict[str, _Section]:
+    """Spend the budget across the sections, most valuable first.
+
+    A section whose heading will not fit is dropped whole: a heading with
+    nothing under it costs tokens and says nothing. The first line of the
+    first section is truncated rather than dropped, because a block that
+    disappears because one row was enormous is a session that starts knowing
+    nothing, which is the failure every guard in this path exists to avoid.
+    """
+    kept: dict[str, _Section] = {}
+    for key in INJECTION_PRIORITY:
+        section = sections.get(key)
+        if not section:
+            continue
+        heading, body = section.lines[0], section.lines[1:]
+        heading_cost = _token_estimate(heading) + 1
+        if spent + heading_cost > budget:
+            continue
+        spent += heading_cost
+        lines: list[str] = [heading]
+        facts: list[Fact] = []
+        for i, line in enumerate(body):
+            cost = _token_estimate(line) + 1
+            if spent + cost > budget:
+                if len(lines) > 1 or kept:
+                    break  # the block already says something; stop here
+                line = _truncate_to(line, budget - spent)
+                cost = _token_estimate(line) + 1
+                if cost <= 0:
+                    break
+            spent += cost
+            lines.append(line)
+            if i < len(section.facts):
+                facts.append(section.facts[i])
+        if len(lines) > 1:
+            kept[key] = _Section(key, lines, facts)
+    return kept
+
+
+def _section_from_ledger(key: str, lines: list[str]) -> _Section:
+    """The ledger sections already render themselves; drop their trailing
+    blank, which the assembler puts back."""
+    body = [line for line in lines if line]
+    return _Section(key, body)
+
+
 def recall_context(
     store: Store, *, scope: str | None = None, cwd: str | None = None,
-    limit: int = MAX_INJECTED, session_id: str | None = None,
+    limit: int | None = None, session_id: str | None = None,
 ) -> str:
     """What the agent should know before it starts, as plain text.
 
@@ -918,14 +1016,17 @@ def recall_context(
     # Two-tier by construction: how the user works travels with them, what a
     # repo does stays in the repo. Unscoped means everything, as before.
     scopes = ["global", scope] if scope else None
-    project_lines: list[str] = []
+    sections: dict[str, _Section] = {}
     if scope:
         ledger = ActivityLedger(store.conn)
-        project_lines = (
-            _left_off_section(ledger, scope)
-            + _open_loops_section(store.conn, scope)
-            + _changed_section(ledger, scope, cwd)
-        )
+        sections["left_off"] = _section_from_ledger(
+            "left_off", _left_off_section(ledger, scope))
+        sections["loops"] = _section_from_ledger(
+            "loops", _open_loops_section(store.conn, scope))
+        sections["changed"] = _section_from_ledger(
+            "changed", _changed_section(ledger, scope, cwd))
+    project_lines = [line for key in ("left_off", "loops", "changed")
+                     if sections.get(key) for line in sections[key].lines]
     # Suspect facts are included on purpose. They are exactly the ones an agent
     # would otherwise use without knowing their foundation collapsed, and
     # listing them under a warning is the only way the cascade reaches the
@@ -952,32 +1053,57 @@ def recall_context(
     # apart when both were just asserted.
     sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK, -pair[0].occurrences, -pair[1]))
     suspect.sort(key=lambda pair: -pair[1])
-    chosen = sound[:limit] + suspect[:MAX_SUSPECT_INJECTED]
+    # `limit` is still honoured when a caller sets one, but nothing sets one by
+    # default any more: the token budget is what decides how much of the store
+    # a session is handed.
+    if limit is not None:
+        sound = sound[:limit]
 
-    if session_id:
-        hits = [(fact, score, {}) for fact, score in chosen]
-        store.ledger.log_many(hits, session_id=session_id, query="")
-        store.mark_used([fact.id for fact, _ in chosen])
-
-    header = f"# Memory (nenapu) — {scope}" if scope else "# Memory (nenapu)"
-    lines = [header, "", *project_lines]
-    kept = [f for f, _ in chosen if f.status != Status.SUSPECT]
-    doubted = [f for f, _ in chosen if f.status == Status.SUSPECT]
-    corrections = [f for f in kept if f.kind == Kind.FEEDBACK]
-    others = [f for f in kept if f.kind != Kind.FEEDBACK]
+    corrections = [f for f, _ in sound if f.kind == Kind.FEEDBACK]
+    others = [f for f, _ in sound if f.kind != Kind.FEEDBACK]
+    doubted = [f for f, _ in suspect[:MAX_SUSPECT_INJECTED]]
 
     if corrections:
-        lines.append("Previously corrected — do not repeat these:")
-        lines += [_correction_line(f) for f in corrections]
-        lines.append("")
+        sections["corrections"] = _Section(
+            "corrections",
+            ["Previously corrected — do not repeat these:"]
+            + [_correction_line(f) for f in corrections],
+            corrections,
+        )
     if others:
-        lines.append("Known about this work:")
-        lines += [f"- {f.text}" for f in others]
+        sections["known"] = _Section(
+            "known",
+            ["Known about this work:"] + [f"- {f.text}" for f in others],
+            others,
+        )
+    if doubted:
+        sections["falsified"] = _Section(
+            "falsified",
+            ["Do not rely on these — what they rested on was falsified:"]
+            + [f"- {f.text}" for f in doubted],
+            doubted,
+        )
+
+    header = f"# Memory (nenapu) — {scope}" if scope else "# Memory (nenapu)"
+    kept = _fit(sections, _token_estimate(header) + 2, INJECTION_TOKEN_BUDGET)
+
+    lines = [header, ""]
+    for key in INJECTION_RENDER_ORDER:
+        section = kept.get(key)
+        if not section:
+            continue
+        lines += section.lines
         lines.append("")
 
-    if doubted:
-        lines.append("Do not rely on these — what they rested on was falsified:")
-        lines += [f"- {f.text}" for f in doubted]
+    # Log what was actually printed, not what was considered: a recall row for
+    # a fact the session never saw is evidence of nothing, and the gate reads
+    # these rows.
+    injected = [fact for key in INJECTION_RENDER_ORDER
+                for fact in kept.get(key, _Section(key, [])).facts]
+    if session_id and injected:
+        store.ledger.log_many([(fact, 0.0, {}) for fact in injected],
+                              session_id=session_id, query="")
+        store.mark_used([fact.id for fact in injected])
     return "\n".join(lines).strip()
 
 

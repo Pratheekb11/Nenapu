@@ -499,7 +499,6 @@ def recall(store, **kwargs):
 # `observer._token_estimate(text)` the budget is counted in.
 # ==========================================================================
 
-r3 = pytest.mark.xfail(strict=True, reason="R3 not implemented yet: remove when it lands")
 r4 = pytest.mark.xfail(strict=True, reason="R4 not implemented yet: remove when it lands")
 
 
@@ -537,7 +536,6 @@ def _tokens(block):
 # ---------- R3 · the budget is tokens, not rows ----------
 
 
-@r3
 def test_a_block_of_long_facts_costs_no_more_than_a_block_of_short_ones(store):
     """Twelve facts is 200 tokens or 2000 depending on what got written, and
     the difference is paid on every request of every session."""
@@ -552,7 +550,6 @@ def test_a_block_of_long_facts_costs_no_more_than_a_block_of_short_ones(store):
     assert _tokens(block) <= INJECTION_TOKEN_BUDGET
 
 
-@r3
 def test_the_budget_is_never_exceeded_by_any_section(store, ledger):
     """Facts, warnings, open loops, changed files, where you left off: five
     sections that each used to have their own count cap and no shared
@@ -589,7 +586,6 @@ def test_corrections_are_not_starved_by_a_long_changed_files_list(store, ledger)
     assert "co-author" in block
 
 
-@r3
 def test_one_fact_longer_than_the_whole_budget_is_truncated_not_dropped(store):
     """A block that disappears because one row is enormous is a session that
     starts knowing nothing, which is the failure mode every guard in this
@@ -605,7 +601,6 @@ def test_one_fact_longer_than_the_whole_budget_is_truncated_not_dropped(store):
     assert _tokens(block) <= INJECTION_TOKEN_BUDGET
 
 
-@r3
 def test_short_facts_are_not_cut_at_twelve_when_the_budget_allows_more(store):
     """The count cap was a proxy for cost. Once cost is measured directly, a
     store of one-line facts should be allowed to send more of them."""
@@ -618,7 +613,6 @@ def test_short_facts_are_not_cut_at_twelve_when_the_budget_allows_more(store):
     assert len(_fact_lines(block)) > 12
 
 
-@r3
 def test_the_measured_budget_is_written_down(store):
     """The plan asks this task to answer the "Token cost" section of
     IMPLEMENTATION_NOTES.md with a measured number rather than an intention."""

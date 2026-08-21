@@ -463,9 +463,20 @@ it now carries four outputs instead of two. Measured at 4 chars/token:
 
 So grading and entity extraction together add roughly 590 tokens to a call
 that already sends a whole session's conversation, and they buy the recall
-ledger its evidence without a second model call. Both blocks are capped by
-count rather than by length, which is the same unit R3 replaces in the
-injection path.
+ledger its evidence without a second model call.
+
+The injected block is the other half, and it is paid for on every request of
+every session rather than once. It used to be capped by count — twelve facts,
+five warnings, six files, five loops, eight changed paths — which is the
+wrong unit, because twelve facts is 200 tokens or 2000 depending on what got
+written. Measured against the live store on 2026-08-22, the block came to
+841 estimated tokens while the gate reported 84% of injected facts unused.
+It is now bounded by `INJECTION_TOKEN_BUDGET = 700` estimated tokens across
+the whole block, spent in priority order: corrections, then warnings, then
+where you left off, then open loops, then what is known, and last the list of
+what changed while you were away. A single fact longer than the whole budget
+is truncated rather than dropped, because a block that disappears is a
+session that starts knowing nothing.
 
 ## The pet: five versions, and the one lesson worth keeping
 
