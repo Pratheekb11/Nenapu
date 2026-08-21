@@ -47,6 +47,13 @@ BAD_RATE_THRESHOLD = 0.3
 # scope. Under half and the problem is that memory is not arriving at all,
 # which no amount of ranking inside it would fix.
 COVERAGE_FLOOR = 0.5
+# A session that logs the very first recall the store has ever seen started
+# some moments *before* that recall was logged — a SessionStart hook fires
+# early, but not at the same instant. Excluding that founding session from
+# its own era over a sub-second gap would be excluding the session the
+# boundary is defined by. Five minutes is generous next to the day-scale
+# ages this report otherwise reasons about.
+COVERAGE_ERA_GRACE_SECONDS = 300.0
 
 INSUFFICIENT = "insufficient-evidence"
 BUILD_VECTORS = "build-vectors"
@@ -73,6 +80,8 @@ def retrieval_evidence(
         **_recall_counts(conn, since),
         "wrong_project": _wrong_project_recalls(conn, since),
         **_coverage(conn, since),
+        "injection": _population(conn, since, query_is_empty=True, rate_key="unused_rate"),
+        "query": _population(conn, since, query_is_empty=False, rate_key="bad_rate"),
     }
     evidence["verdict"] = decide(evidence)
     return evidence
@@ -85,10 +94,18 @@ def _recall_counts(conn: sqlite3.Connection, since: float) -> dict:
     graded is not evidence of anything, and counting one as a success would
     make every store look healthy.
     """
+    # A recall closed by `expire_pending` (outcome_source='expiry') is the
+    # absence of evidence, not evidence: a timer closed it, nobody looked. It
+    # is excluded from good/bad/neutral/graded and reported under its own key,
+    # so a ledger closed entirely by the clock cannot read as `graded=480`
+    # and clear the gate on the strength of a timeout.
     row = conn.execute(
         "SELECT COUNT(*) AS total,"
-        " SUM(outcome = ?) AS good, SUM(outcome = ?) AS bad,"
-        " SUM(outcome = ?) AS neutral, SUM(outcome = ?) AS pending,"
+        " SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS good,"
+        " SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS bad,"
+        " SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS neutral,"
+        " SUM(outcome = ?) AS pending,"
+        " SUM(outcome_source IS 'expiry') AS expired,"
         " MIN(created_at) AS first_at, MAX(created_at) AS last_at"
         " FROM recalls WHERE created_at >= ?",
         (Outcome.GOOD, Outcome.BAD, Outcome.NEUTRAL, Outcome.PENDING, since),
@@ -102,6 +119,7 @@ def _recall_counts(conn: sqlite3.Connection, since: float) -> dict:
         "bad": bad,
         "neutral": neutral,
         "pending": row["pending"] or 0,
+        "expired": row["expired"] or 0,
         "graded": graded,
         "bad_rate": (bad / graded) if graded else 0.0,
         "days_of_data": span / DAY,
@@ -128,6 +146,37 @@ def _wrong_project_recalls(conn: sqlite3.Connection, since: float) -> int:
     return row["n"] or 0
 
 
+def _population(conn: sqlite3.Connection, since: float, *, query_is_empty: bool,
+                rate_key: str) -> dict:
+    """One of the two populations G7 splits the ledger into.
+
+    480 of 483 recalls in the live store are SessionStart bulk injections
+    with `query = ''` — they measure *selection*, whether the right fact was
+    chosen. The other three came from a search and measure *ranking*, whether
+    the right fact was found at all. Pooling them into one bad_rate lets
+    whichever population is larger drown the other; `rate_key` names the rate
+    that population is judged by, so a caller reads `unused_rate` off the
+    injection population and `bad_rate` off the query population without the
+    two being confused for each other.
+    """
+    op = "=" if query_is_empty else "!="
+    row = conn.execute(
+        f"SELECT SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS good,"
+        f" SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS bad,"
+        f" SUM(outcome = ? AND outcome_source IS NOT 'expiry') AS neutral"
+        f" FROM recalls WHERE created_at >= ? AND query {op} ''",
+        (Outcome.GOOD, Outcome.BAD, Outcome.NEUTRAL, since),
+    ).fetchone()
+
+    good, bad, neutral = (row["good"] or 0), (row["bad"] or 0), (row["neutral"] or 0)
+    graded = good + bad + neutral
+    rate = {"unused_rate": neutral, "bad_rate": bad}[rate_key]
+    return {
+        "good": good, "bad": bad, "neutral": neutral, "graded": graded,
+        rate_key: (rate / graded) if graded else 0.0,
+    }
+
+
 def _coverage(conn: sqlite3.Connection, since: float) -> dict:
     """How many sessions were given any memory at all.
 
@@ -136,17 +185,28 @@ def _coverage(conn: sqlite3.Connection, since: float) -> dict:
     scope, is the measurable shadow of it. Sessions in a scope the store
     knows nothing about are left out: they were given nothing because there
     was nothing to give.
+
+    Restricted to the hook era: a session that predates the first recall the
+    store ever logged could not have received one, because the mechanism did
+    not exist yet. Counting it as "given nothing" drags coverage toward a
+    verdict about history rather than about the system. `coverage_since` is
+    the first recall ever logged, not the evidence window — a store with no
+    recalls at all has no hook era to measure inside, and the subquery's NULL
+    then matches no session, which falls through to the same "no sessions to
+    judge" fallback as an unused store.
     """
+    coverage_since = conn.execute("SELECT MIN(created_at) AS m FROM recalls").fetchone()["m"]
+    era_start = None if coverage_since is None else coverage_since - COVERAGE_ERA_GRACE_SECONDS
     row = conn.execute(
         "SELECT COUNT(*) AS total, SUM(EXISTS("
         "   SELECT 1 FROM recalls r"
         "   WHERE r.session_id = s.external_id AND r.created_at >= :since"
         " )) AS given"
         " FROM sessions s"
-        " WHERE s.started_at >= :since AND s.external_id IS NOT NULL"
+        " WHERE s.started_at >= :era_start AND s.external_id IS NOT NULL"
         " AND EXISTS(SELECT 1 FROM facts f WHERE f.status = 'active'"
         "            AND (f.scope = s.project_scope OR f.scope = 'global'))",
-        {"since": since},
+        {"since": since, "era_start": era_start},
     ).fetchone()
 
     total = row["total"] or 0
@@ -157,6 +217,7 @@ def _coverage(conn: sqlite3.Connection, since: float) -> dict:
         # No sessions to judge is not a coverage failure; saying 0.0 here
         # would report a problem on a store that has simply not been used.
         "coverage_rate": (given / total) if total else 1.0,
+        "coverage_since": coverage_since,
     }
 
 
@@ -168,12 +229,21 @@ def decide(evidence: dict) -> str:
     checked before vectors, since that is the case where the repair already
     shipped. Coverage is last of the failures: it only means anything once
     the facts that did arrive were mostly right.
+
+    Sufficiency and the bad rate are read off `good + bad` only, never
+    `neutral` — a neutral recall (graded or expired) says the fact was not
+    relied on, which is a selection question, not a claim that a *wrong*
+    fact surfaced. Pooling neutrals into this count is the fault G7 exists to
+    fix: 460 unused bulk injections plus 3 bad query hits pools to a bad_rate
+    near zero and would clear the gate on the strength of "nobody used this."
     """
+    decided = evidence["good"] + evidence["bad"]
     covered_enough = evidence["days_of_data"] >= MIN_DAYS_OF_DATA * MIN_SPAN_FRACTION
-    if evidence["graded"] < MIN_GRADED_RECALLS or not covered_enough:
+    if decided < MIN_GRADED_RECALLS or not covered_enough:
         return INSUFFICIENT
 
-    if evidence["bad_rate"] >= BAD_RATE_THRESHOLD:
+    bad_rate = (evidence["bad"] / decided) if decided else 0.0
+    if bad_rate >= BAD_RATE_THRESHOLD:
         if evidence["wrong_project"] >= evidence["bad"] / 2:
             return ALREADY_FIXED
         return BUILD_VECTORS

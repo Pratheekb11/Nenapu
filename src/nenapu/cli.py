@@ -914,6 +914,32 @@ def grade(
     console.print(f"graded {graded} recall(s) as {'good' if success else 'bad'}")
 
 
+@app.command("ungraded", rich_help_panel=OUTCOMES)
+def ungraded(limit: int = 20, db: str = DB_OPT) -> None:
+    """Recalls waiting on a grade, with the ids `misled` and `helped` accept.
+
+    `nenapu misled <id>` and `nenapu helped <id>` need a recall id no other
+    command prints, which makes the human grading path unreachable to anyone
+    who has not read the schema. This lists it: reuses `Ledger.pending`
+    rather than a second query with its own idea of what pending means.
+    """
+    store, _ = _stores(db)
+    recalls = store.ledger.pending(limit=limit)
+    if not recalls:
+        console.print("[green]no recalls awaiting a grade[/]")
+        return
+
+    table = Table()
+    for col in ("id", "fact", "session", "age"):
+        table.add_column(col)
+    for r in recalls:
+        fact = store.get(r.fact_id)
+        age_hours = (now() - r.created_at) / 3600.0
+        table.add_row(str(r.id), (fact.text[:60] if fact else "?"),
+                      r.session_id or "-", f"{age_hours:.1f}h ago")
+    console.print(table)
+
+
 @app.command(rich_help_panel=DIAGNOSE)
 def stats(scope: str = "", db: str = DB_OPT) -> None:
     """Health of the store."""
@@ -1097,6 +1123,27 @@ def retrieval(
     ):
         table.add_row(label, str(value))
     console.print(table)
+
+    # Two populations, not one pooled number: injection recalls measure
+    # selection (was the right fact chosen), query recalls measure ranking
+    # (was the right fact found). Printed separately so the split can be
+    # disagreed with on the numbers, not just the total.
+    pop_table = Table()
+    pop_table.add_column("population")
+    pop_table.add_column("graded", justify="right")
+    pop_table.add_column("good", justify="right")
+    pop_table.add_column("bad", justify="right")
+    pop_table.add_column("neutral", justify="right")
+    pop_table.add_column("rate", justify="right")
+    injection, query = evidence["injection"], evidence["query"]
+    pop_table.add_row("injection", str(injection["graded"]), str(injection["good"]),
+                      str(injection["bad"]), str(injection["neutral"]),
+                      f"unused {injection['unused_rate']:.0%}")
+    pop_table.add_row("query", str(query["graded"]), str(query["good"]),
+                      str(query["bad"]), str(query["neutral"]),
+                      f"bad {query['bad_rate']:.0%}")
+    console.print(pop_table)
+
     console.print(f"[bold]{evidence['verdict']}[/] — {VERDICT_MEANING[evidence['verdict']]}")
 
 

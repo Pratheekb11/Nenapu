@@ -126,3 +126,83 @@ def test_task_outcome_grades_a_session(tmp_path, monkeypatch):
     m.memory_write("deploy with make ship")
     m.memory_search("deploy", session_id="task-7")
     assert m.task_outcome(session_id="task-7", success=False)["graded"] == 1
+
+
+# ==========================================================================
+# Pre-written for the MCP half of G8 and E10.
+#
+# G8. The human grading path is unreachable — `nenapu helped` and `nenapu
+# misled` want a recall id no command prints — and the agent path is
+# reachable but unprompted. One line in the `task_outcome` description tells
+# an agent to call it at task end, which is the cheapest half of closing the
+# loop.
+#
+# E10. `Graph.why` prints belief ancestry only. Adding the fact's subject
+# entity and its neighbourhood means a human sees why a fact *surfaced*, not
+# only why it is *believed* — and `memory_why` is the surface an agent asks
+# that question through.
+#
+# The tool surface is paid for on every request of every session, so the
+# budget test above is the guard on both of these.
+# ==========================================================================
+
+import pytest
+
+g8 = pytest.mark.xfail(strict=True, reason="G8 not implemented yet: remove when it lands")
+e10 = pytest.mark.xfail(strict=True, reason="E10 not implemented yet: remove when it lands")
+
+
+def _tool(m, name):
+    return next(t for t in _tools(m) if t.name == name)
+
+
+def test_task_outcome_tells_an_agent_when_to_call_it(tmp_path, monkeypatch):
+    """An agent that is never told when to grade never grades: 480 of 483
+    recalls in the live store are still pending."""
+    m = _server(tmp_path, monkeypatch)
+
+    description = _tool(m, "task_outcome").description.lower()
+
+    assert "task end" in description or "end of the task" in description
+
+
+def test_the_tool_surface_did_not_grow_a_command(tmp_path, monkeypatch):
+    """G8 adds a CLI listing and one line of description. A new MCP tool would
+    be paid for on every request by every agent, which is not what "make the
+    human path reachable" asks for."""
+    m = _server(tmp_path, monkeypatch)
+
+    assert {t.name for t in _tools(m)} == {
+        "memory_search", "memory_write", "memory_verify", "memory_forget",
+        "memory_why", "memory_loops", "task_outcome",
+        "skill_search", "skill_write", "skill_record_outcome",
+    }
+
+
+@e10
+def test_memory_why_shows_the_entity_layer(tmp_path, monkeypatch):
+    from nenapu.entities import EntityGraph
+
+    m = _server(tmp_path, monkeypatch)
+    fact_id = m.memory_write("services/auth/routes.py owns the login handler")["id"]
+    store, _ = m._stores()
+    graph = EntityGraph(store.conn)
+    entity = graph.upsert(kind="file", name="services/auth/routes.py", scope="global")
+    graph.attach(fact_id, entity.id, role="subject", source="path")
+
+    answer = m.memory_why(fact_id)
+
+    assert answer["subject_entity"]["name"] == "services/auth/routes.py"
+
+
+def test_memory_why_on_a_fact_with_no_entity_is_unchanged(tmp_path, monkeypatch):
+    """A store that has never built the entity tier gets exactly today's
+    answer, which is what keeps the rest of this file true."""
+    m = _server(tmp_path, monkeypatch)
+    fact_id = m.memory_write("deploy with make ship")["id"]
+
+    answer = m.memory_why(fact_id)
+
+    assert answer["id"] == fact_id
+    assert "confidence" in answer and "track_record" in answer
+    assert answer.get("subject_entity") in (None, {})

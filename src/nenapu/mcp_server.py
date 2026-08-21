@@ -283,7 +283,7 @@ def task_outcome(
 
     Grade by `session_id` (everything the task used) or one `recall_id`. Facts
     that keep preceding failures lose confidence and stop surfacing. Call this
-    once per task — it is what keeps recall quality honest.
+    at task end, once per task — it is what keeps recall quality honest.
     """
     store, _ = _stores()
     outcome = "good" if success else "bad"
