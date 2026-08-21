@@ -196,6 +196,108 @@ list is never finished — a credential with no recognisable shape, in something
 not named like one, gets through. The README says so rather than implying
 otherwise.
 
+## The activity ledger and what closes a loop
+
+Facts answer "what is true here". They cannot answer "where did I leave off",
+because that is a record of work rather than a claim about the world. So
+sessions, file events and commits are their own tables, filled from two
+sources with no model call on the path.
+
+**Tool calls and git are both needed, and neither is enough.** Git knows the
+net effect and is the only source that can report a *deletion* — files die by
+`rm` or `git rm`, and nothing in the transcript names them. Tool calls know
+the sequence, the tool, and everything touched outside a repository. A path
+both sources see is recorded once, from the tool event, or every
+`files_touched` count doubles.
+
+Four git edge cases decide correctness, and each one is a test. A rename is
+stored as a delete plus a create, because the ledger has no `renamed` op and
+"where did models.py go" has to answer from both ends. A merge is diffed
+`before..after` rather than against its first parent, or everything the side
+branch did disappears. A detached HEAD reports no branch, because
+`--abbrev-ref` answers the literal string `HEAD` there and would group
+unrelated sessions under a branch by that name. Everything is read through
+`git -C <path>`, so a linked worktree reports its own HEAD rather than the
+main checkout's — `~/.claude/projects/` on this machine already contains a
+worktree entry, so that one is real rather than hypothetical.
+
+**`git_head_before` is the field that cannot be recovered later.** By the time
+a session ends, the commit it started from is only knowable if something wrote
+it down, so the SessionStart hook opens the ledger row and the Stop path
+finishes it.
+
+**Closure is biased toward closing.** An open loop is closed by a commit
+touching the path it named, a file written that matches it, or — for a loop
+nobody could attach a path to — a commit whose subject is plainly about it.
+Reading a file closes nothing; opening a file to look at it is the most common
+thing a session does. Neither does work that happened *before* the loop was
+opened, or the whole mechanism closes every loop against the same session's
+earlier edits and is silently inert. The asymmetry is deliberate: being told
+you missed something you shipped last month destroys trust in the block
+permanently, while a reminder that never arrives costs one forgotten task.
+
+**Old loops go quiet rather than shouting.** They age on the same medium decay
+curve facts use and drop out of injection under the same floor, staying
+visible to `nenapu pending --all`. Nothing is deleted.
+
+## The extractor was never shown the store
+
+The extraction could only ever propose ADD, because it had never seen a fact.
+Measured over 367 live facts: 12 groups of exact duplicates once filler words
+are stripped, 275 near-duplicate pairs at Jaccard ≥ 0.6, and the same Ollama
+context-window fact independently re-learned **five times**.
+
+The fix is one FTS query over the session's own words, and the retrieved facts
+go into the same prompt with their ids. The schema then carries `op` and
+`target_id`, so the model can say "this updates 12" or "already recorded".
+
+**What comes back is a proposal.** A `target_id` the model was not shown is
+rejected and demoted to an add — real ids are guessable, and the 1.5b in the
+calibration table invented nine of them for four facts, which was harmless
+while every op was an add and is exactly what this schema makes dangerous. A
+`user_stated` fact is never reworded by a model's reading of a session; the
+recurrence is still counted, because being told the same thing again is true
+whoever owns the wording. A missing `op` means add, so a backend that knows
+nothing about the field behaves as it did before.
+
+## The injected block was about every project at once
+
+`recall_context` was called with no scope, so a session in one backend was
+told about another project's Ollama context window. It now derives the project
+from the session's cwd and asks for that project plus global.
+
+Three of the four sections come from the ledger rather than from belief, and
+every one of them is capped. The block is prepended to every request, so one
+refactor session touching two hundred files would otherwise spend the whole
+budget saying so. An empty section is omitted rather than rendered as a header
+with nothing under it — a header that says nothing still costs tokens on every
+request.
+
+"Changed since you were last here" is one git call, from the commit the last
+session ended on to HEAD now. A recorded commit can become unreachable after a
+rebase or a pruned branch, and there the section is simply absent: a
+SessionStart hook that raises is a session that starts knowing nothing.
+
+## The watcher polls, and refuses to guess
+
+Only Claude Code can announce that a session ended. Everything else writes a
+file and says nothing.
+
+**An adapter is data.** A glob and a parser in a list, so adding an agent is
+registering an entry rather than editing the observer. Only Claude Code is
+registered, deliberately: a glob nobody has watched match is a feature that
+reports success and captures nothing.
+
+**"Finished" is measured across ticks, not read off the mtime.** A session
+that ended two minutes ago and one still being written look the same to
+`stat`; only the tick history separates them, so a transcript is read once its
+size has held still for the quiet window. The recorded ingestion length is
+kept as well, so a resumed session that appends is picked up again while an
+untouched one is never read twice.
+
+**An agent whose Stop hook is installed is skipped.** The unique index would
+absorb the duplicate facts, but not the 83 seconds spent producing them.
+
 ## Decisions that came from measurement
 
 Each of these was wrong on first attempt. The measurement is recorded because
@@ -418,5 +520,11 @@ originality in the wrong place.
   transcript would produce, and that is the whole of the defence.
 - No full-store backup/restore; export is a filtered Markdown block.
 - The `anthropic` backend proper is unexercised — `exec` covers the same path.
+- Vectors and an entity tier are designed but deliberately unbuilt: the plan
+  gates both on the recall ledger showing that retrieval is what fails, and
+  building them first would invent the design that evidence is supposed to
+  choose.
+- The watcher ships one adapter. Codex, Gemini, OpenCode and Cursor need a
+  probing session against a machine that has them installed.
 - Ollama keeps generating after a client timeout; handled, not elegant.
 - Python 3.10 through 3.13 are run in CI; nothing outside that range is.

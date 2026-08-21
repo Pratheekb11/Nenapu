@@ -167,6 +167,60 @@ seconds is unusable, and one capped at 60 is killed before it writes anything,
 which is how a memory layer ends up looking like it works while learning
 nothing.
 
+## What you were doing, not only what you know
+
+A belief network cannot answer "where did I leave off" — that is not a claim
+about the world, it is a record of work. So sessions, the files they touched
+and the commits they made are recorded deterministically, from the
+transcript's tool calls and from `git diff`, with no model call anywhere on
+that path.
+
+```bash
+nenapu standup               # what happened yesterday, across every repo
+nenapu activity              # the raw ledger, newest first
+nenapu where app/models.py   # which agent touched this file, and when
+nenapu project backend       # one repo: sessions, files, commits
+nenapu pending               # open loops: mentioned, never done
+```
+
+Deletion is why git is read at all. A file removed by `rm` is named in no tool
+call, and parsing shell strings for it is fragile enough to be worse than not
+trying.
+
+Opening a session in a repo then gets the block that is actually about that
+repo:
+
+```
+  # Memory (nenapu) — repo:backend@aa19c3f0
+
+  Where you left off (3d ago, claude-code):
+  - touched backend/app/bookings.py, backend/app/models.py
+  - last commit: "Add booking overlap constraint"
+
+  Open here — mentioned but not done:
+  - Rate limiting on the public availability endpoint
+
+  Changed since you were last here:
+  - edited backend/app/models.py
+```
+
+An open loop is closed by evidence, never by asking: a commit touching the
+path it named, a file written that matches it, or a commit whose subject is
+plainly about it. Closure is deliberately biased toward closing. Being told
+you missed something you shipped last month costs more trust than a forgotten
+reminder ever costs time.
+
+Agents with no hook API are covered by polling instead:
+
+```bash
+nenapu watch --once          # one pass over the transcripts on disk
+nenapu init --watch          # install the background unit
+```
+
+A transcript is read once its size has held still for two minutes, and an
+agent whose Stop hook is installed is skipped — the unique index would absorb
+the duplicate facts, but not the 83 seconds spent producing them.
+
 ## Use
 
 ```bash
