@@ -402,7 +402,6 @@ def test_an_entity_with_no_facts_cascades_into_nothing(store, approve_all):
 # ---------- E10 · why, across both layers ----------
 
 
-@e10
 def test_why_shows_the_subject_entity_and_its_neighbourhood(store, approve_all):
     """Belief ancestry answers why a fact is *believed*. The entity layer
     answers why it *surfaced*, and a human debugging a bad recall needs the

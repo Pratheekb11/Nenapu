@@ -245,8 +245,26 @@ class Graph:
                     out["rests_on"] = rests_on
             return out
 
-        return {
+        result = {
             **node(fact_id, 0),
             "suspect_reason": row["suspect_reason"],
             "supports": [c for c, _s, _w in self.children(fact_id)],
         }
+
+        # Belief ancestry answers why a fact is *believed*. The entity layer
+        # answers why it *surfaced* — its subject entity and neighbourhood,
+        # when it has one. A store that has never built the entity tier gets
+        # exactly today's output: the key is simply absent.
+        from .entities import EntityGraph
+
+        entity_graph = EntityGraph(self.conn)
+        for entity, role in entity_graph.entities_for_fact(fact_id):
+            if role != "subject":
+                continue
+            result["subject_entity"] = {
+                "id": entity.id, "kind": entity.kind, "name": entity.name,
+                "neighbourhood": entity_graph.neighbours(entity.id, depth=2),
+            }
+            break
+
+        return result

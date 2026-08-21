@@ -179,7 +179,6 @@ def test_the_tool_surface_did_not_grow_a_command(tmp_path, monkeypatch):
     }
 
 
-@e10
 def test_memory_why_shows_the_entity_layer(tmp_path, monkeypatch):
     from nenapu.entities import EntityGraph
 
