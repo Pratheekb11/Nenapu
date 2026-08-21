@@ -105,3 +105,92 @@ def test_writing_many_facts_stays_linear(tmp_path):
     for i in range(200):
         store.write(Fact(text=f"distinct claim number {i}"))
     assert time.time() - started < 20
+
+
+# ==========================================================================
+# Pre-written budgets for R1 · candidate generation and E7 · entity-anchored
+# retrieval. Both touch `Store.search`, which is the hottest path in the
+# system, and both make it do more work: R1 unions a confidence-ordered pool
+# with the lexical one, E7 adds a depth-2 graph traversal per query.
+#
+# The budgets below are generous relative to the fixed timing and far under
+# anything a user would notice, which is the same shape every budget in this
+# file already has. A regression here is paid on every recall of every
+# session.
+# ==========================================================================
+
+e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
+
+
+def test_the_pool_union_does_not_slow_recall_down(tmp_path):
+    """R1's fix is a second, confidence-ordered pool unioned with the lexical
+    one before scoring. Two pools is more rows to score, on the path that was
+    5.7s at 3,000 facts before the last round of work."""
+    store = _seeded(tmp_path, 2000, "pool")
+    store.search("cache queue", limit=8)          # warm
+
+    started = time.time()
+    for _ in range(5):
+        store.search("cache queue", limit=8, session_id="bench")
+
+    assert (time.time() - started) / 5 < 0.5
+
+
+def test_a_multi_term_query_stays_cheap(tmp_path):
+    """`relevant_memory` feeds `search` up to 40 salient terms from a whole
+    session. Whatever R1 does about required versus optional terms, forty of
+    them must not turn one query into forty."""
+    store = _seeded(tmp_path, 2000, "terms")
+    query = " ".join(WORDS * 4)
+    store.search(query, limit=8)                  # warm
+
+    started = time.time()
+    store.search(query, limit=8, session_id="bench")
+
+    assert time.time() - started < 1.0
+
+
+@e7
+def test_entity_anchored_recall_stays_within_budget(tmp_path):
+    """Depth-2 traversal with per-hop decay, per query, on a store with an
+    entity per touched path — 647 of them in the live store today."""
+    from nenapu.entities import EntityGraph
+
+    store = _seeded(tmp_path, 2000, "anchor")
+    graph = EntityGraph(store.conn)
+    with store.transaction():
+        previous = None
+        for i, fact in enumerate(store.list_facts(limit=400)):
+            entity = graph.upsert(kind="file", name=f"app/module_{i}.py", scope="global")
+            graph.attach(fact.id, entity.id, role="subject", source="path")
+            if previous is not None:
+                graph.link(previous, entity.id, kind="touched_with")
+            previous = entity.id
+    store.search("cache queue", limit=8, near=["app/module_0.py"])   # warm
+
+    started = time.time()
+    for _ in range(5):
+        store.search("cache queue", limit=8, near=["app/module_0.py"], session_id="bench")
+
+    assert (time.time() - started) / 5 < 0.5
+
+
+@e7
+def test_an_unanchored_query_pays_nothing_for_the_entity_tier(tmp_path):
+    """A store with entities in it must not make every unanchored recall walk
+    a graph it was not asked about."""
+    from nenapu.entities import EntityGraph
+
+    store = _seeded(tmp_path, 2000, "unanchored")
+    graph = EntityGraph(store.conn)
+    with store.transaction():
+        for i, fact in enumerate(store.list_facts(limit=400)):
+            entity = graph.upsert(kind="file", name=f"app/module_{i}.py", scope="global")
+            graph.attach(fact.id, entity.id, role="subject", source="path")
+    store.search("cache queue", limit=8)          # warm
+
+    started = time.time()
+    for _ in range(5):
+        store.search("cache queue", limit=8, session_id="bench")
+
+    assert (time.time() - started) / 5 < 0.5

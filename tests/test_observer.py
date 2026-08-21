@@ -621,3 +621,184 @@ def test_the_log_does_not_grow_without_end(tmp_path):
     assert log.stat().st_size < MAX_LOG_BYTES
     assert log.with_suffix(".log.1").exists()
     assert "the newest failure" in log.read_text()
+
+
+# ==========================================================================
+# Pre-written for R2 · diversity at selection.
+#
+# Requirement. Selection is top-N by score with no diversity check —
+# `chosen = sound[:limit] + suspect[:MAX_SUSPECT_INJECTED]`. The live store
+# holds 46 superseded facts and many near-identical actives, so twelve
+# injection slots can carry three distinct claims. `distill.dedupe` runs at
+# write time and per scope, which is a different moment and does not help the
+# block.
+#
+# Signals available with no embeddings: a shared `key`, `supersedes_id` /
+# `superseded_by_id` chains, token overlap, and a shared subject entity once
+# E3 lands.
+#
+# The false-positive cost is why this task is Opus 5: merging two facts that
+# only *look* similar silently hides one, and the block is the one surface
+# where a hidden fact is never noticed. So the warning list is exempt, for the
+# same reason the confidence floor does not apply to it.
+#
+# Held until G9's verdict is recorded — R2 changes what gets injected, and
+# shipping it before the gate reads the ledger would move the measurement
+# under its own feet.
+# ==========================================================================
+
+r2 = pytest.mark.xfail(strict=True, reason="R2 not implemented yet: remove when it lands")
+
+
+def _lines(block):
+    return [line[2:] for line in block.splitlines() if line.startswith("- ")]
+
+
+def _same_key_variants(store, n, *, key="deploy.command"):
+    """`n` active facts sharing one key, the way the live store holds them.
+
+    Written through `_insert` on purpose: `store.write` would compare each
+    variant against the others and supersede the ones that read as
+    contradictions, which is a different mechanism doing a different job at a
+    different moment. What R2 has to handle is the residue that survives all
+    of that — 46 superseded rows and many near-identical actives.
+    """
+    with store.transaction():
+        return [store._insert(Fact(
+            text=f"the deploy command is described here in phrasing {i}",
+            key=key, kind=Kind.PROJECT, confidence=0.95,
+        )) for i in range(n)]
+
+
+def _fill(store, n, *, prefix="a distinct claim about subject"):
+    """Facts with nothing in common, to compete for the slots freed."""
+    return [store.write(Fact(text=f"{prefix} {i}, which nothing else in the store says",
+                             kind=Kind.PROJECT, confidence=0.9))[0]
+            for i in range(n)]
+
+
+@r2
+def test_twelve_facts_sharing_one_key_take_one_slot(store):
+    """One key is one subject with one value. Twelve phrasings of it are
+    twelve slots spent on one claim."""
+    _same_key_variants(store, 12)
+    _fill(store, 5)
+
+    block = recall_context(store)
+
+    assert sum(1 for line in _lines(block) if "the deploy command is described" in line) == 1
+
+
+@r2
+def test_the_slots_freed_go_to_other_claims(store):
+    """Diversity is not a smaller block, it is a block that says more. If the
+    twelve restatements simply vanish and nothing takes their place, the
+    session is told less than before."""
+    _same_key_variants(store, 12)
+    others = _fill(store, 8)
+
+    block = recall_context(store)
+
+    for fact in others:
+        assert fact.text in block
+
+
+def test_a_superseded_chain_contributes_one_claim(store):
+    """`supersedes_id` / `superseded_by_id` is the store saying outright that
+    two rows are the same claim at two moments."""
+    old, _ = store.write(Fact(text="the database port is 5432", key="db.port",
+                              origin=Origin.AGENT_INFERRED, confidence=0.6))
+    store.write(Fact(text="the database port is 6543", key="db.port",
+                     origin=Origin.USER_STATED, confidence=0.95))
+    _fill(store, 5)
+
+    block = recall_context(store)
+
+    assert "6543" in block
+    assert "5432" not in block
+    assert store.get(old.id).status == Status.SUPERSEDED
+
+
+@r2
+def test_near_identical_wording_collapses_to_one_slot(store):
+    """No embeddings available, so token overlap is the signal. Two rows that
+    differ by an article are one claim however they were written."""
+    store.write(Fact(text="the test suite is run with uv run pytest",
+                     kind=Kind.PROJECT, confidence=0.9))
+    store.write(Fact(text="test suite is run with uv run pytest",
+                     kind=Kind.PROJECT, confidence=0.85))
+    _fill(store, 5)
+
+    block = recall_context(store)
+
+    assert sum(1 for line in _lines(block) if "uv run pytest" in line) == 1
+
+
+def test_two_distinct_facts_with_overlapping_wording_both_survive(store):
+    """The false-positive case, and the reason the task is not a one-line
+    similarity threshold: these two share most of their words and say
+    different things."""
+    store.write(Fact(text="the staging database runs on port 5432",
+                     kind=Kind.ENVIRONMENT, confidence=0.9))
+    store.write(Fact(text="the staging redis runs on port 6379",
+                     kind=Kind.ENVIRONMENT, confidence=0.9))
+
+    block = recall_context(store)
+
+    assert "5432" in block and "6379" in block
+
+
+def test_a_suspect_fact_is_never_dropped_for_redundancy(store):
+    """The warning list is exempt, for the same reason the confidence floor
+    does not apply to it: a suspect fact is listed precisely because an agent
+    would otherwise use it without knowing its foundation collapsed."""
+    root, _ = store.write(Fact(text="the deploy command is make ship",
+                               key="deploy.command", confidence=0.9))
+    doubted, _ = store.write(Fact(text="the deploy command is make ship, as of the "
+                                       "release runbook", key="deploy.command",
+                                  confidence=0.9))
+    store.set_status(doubted.id, Status.SUSPECT)
+
+    block = recall_context(store)
+
+    assert "release runbook" in block
+    assert "falsified" in block.lower()
+
+
+def test_a_correction_is_not_hidden_behind_a_project_fact(store):
+    """Corrections lead the block and are the highest-value thing in it.
+    Redundancy pruning must not be the thing that finally silences one."""
+    store.write(Fact(text="commit messages never carry a co-author trailer",
+                     kind=Kind.FEEDBACK, confidence=0.9))
+    store.write(Fact(text="commit messages never carry a co-author trailer in this repo",
+                     kind=Kind.PROJECT, confidence=0.95))
+
+    block = recall_context(store)
+
+    assert "do not repeat these" in block.lower()
+    assert "co-author" in block.split("do not repeat these:")[1].lower()
+
+
+def test_diversity_does_not_reorder_the_block(store):
+    """Corrections first, then everything else — R2 removes restatements, it
+    does not reshuffle what remains."""
+    store.write(Fact(text="the repo uses uv, never pip", kind=Kind.PROJECT,
+                     confidence=0.95))
+    store.write(Fact(text="do not add a Claude co-author trailer", kind=Kind.FEEDBACK,
+                     confidence=0.7))
+
+    block = recall_context(store)
+
+    assert block.index("co-author") < block.index("uses uv")
+
+
+def test_selection_on_a_store_with_no_duplicates_is_unchanged(store):
+    """A store with nothing to collapse gets exactly today's block, which is
+    what keeps every existing test in this file true."""
+    for i in range(3):
+        store.write(Fact(text=f"a distinct claim number {i}", kind=Kind.PROJECT,
+                         confidence=0.9))
+
+    block = recall_context(store)
+
+    assert len(_lines(block)) == 3

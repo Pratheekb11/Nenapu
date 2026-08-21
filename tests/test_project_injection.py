@@ -473,3 +473,353 @@ def recall(store, **kwargs):
     from nenapu.observer import recall_context
 
     return recall_context(store, **kwargs)
+
+
+# ==========================================================================
+# Pre-written for R3 · injection budget in tokens, and R4 · injection
+# anchored on the work at hand. Both held until G9's verdict is recorded,
+# because both change what gets injected and shipping either mid-measurement
+# moves the thing being measured.
+#
+# R3. Every cap in the injection path is a count: MAX_INJECTED = 12,
+# MAX_SUSPECT_INJECTED = 5, MAX_LEFT_OFF_FILES = 6, MAX_OPEN_LOOPS = 5,
+# MAX_CHANGED = 8. The block is prepended to every session and paid for on
+# every request, so a count is the wrong unit — twelve facts is 200 tokens or
+# 2000 depending on what got written. Replace the count caps with a token
+# budget across the whole block, sections keeping their relative priority.
+#
+# R4. `recall_context` sorts by `(kind != FEEDBACK, -occurrences,
+# -confidence)`. Nothing about cwd, branch, or which files the last sessions
+# touched, so the block is deterministic and identical for every session in a
+# repo until the store itself changes — the mechanical reason it reads as a
+# dump. Anchor it on what the activity ledger already holds. E7 extends this
+# anchor through the entity graph rather than replacing it.
+#
+# Assumed seams: `observer.INJECTION_TOKEN_BUDGET` and an
+# `observer._token_estimate(text)` the budget is counted in.
+# ==========================================================================
+
+r3 = pytest.mark.xfail(strict=True, reason="R3 not implemented yet: remove when it lands")
+r4 = pytest.mark.xfail(strict=True, reason="R4 not implemented yet: remove when it lands")
+
+
+def _fact_lines(block):
+    return [line for line in block.splitlines() if line.startswith("- ")]
+
+
+def _known_lines(block):
+    """Only the facts, not the ledger sections above them.
+
+    "Where you left off" already varies with what was edited; a test satisfied
+    by that would pass today while the memory half of the block stayed
+    identical for every session in the repo.
+    """
+    if "Known about this work:" not in block:
+        return []
+    tail = block.split("Known about this work:", 1)[1]
+    lines = []
+    for line in tail.splitlines():
+        if line.startswith("- "):
+            lines.append(line)
+        elif lines:
+            break
+    return lines
+
+
+def _tokens(block):
+    """The budget's own unit, so a test cannot pass by measuring a different
+    thing from the implementation."""
+    from nenapu.observer import _token_estimate
+
+    return _token_estimate(block)
+
+
+# ---------- R3 · the budget is tokens, not rows ----------
+
+
+@r3
+def test_a_block_of_long_facts_costs_no_more_than_a_block_of_short_ones(store):
+    """Twelve facts is 200 tokens or 2000 depending on what got written, and
+    the difference is paid on every request of every session."""
+    from nenapu.observer import INJECTION_TOKEN_BUDGET
+
+    for i in range(12):
+        store.write(Fact(text=f"a long fact number {i}: " + "with a great deal of detail " * 30,
+                         kind=Kind.PROJECT, confidence=0.9))
+
+    block = recall(store)
+
+    assert _tokens(block) <= INJECTION_TOKEN_BUDGET
+
+
+@r3
+def test_the_budget_is_never_exceeded_by_any_section(store, ledger):
+    """Facts, warnings, open loops, changed files, where you left off: five
+    sections that each used to have their own count cap and no shared
+    ceiling."""
+    from nenapu.observer import INJECTION_TOKEN_BUDGET
+    from nenapu.loops import LoopBook
+
+    _finished_session(ledger, files=tuple(f"backend/app/file_{i}.py" for i in range(40)))
+    book = LoopBook(store.conn)
+    for i in range(20):
+        book.open_loop(scope=SCOPE, text=f"an open loop number {i} " + "with detail " * 20)
+    for i in range(30):
+        store.write(Fact(text=f"a fact number {i} " + "with detail " * 20, scope=SCOPE,
+                         kind=Kind.PROJECT, confidence=0.9))
+
+    block = recall(store, scope=SCOPE)
+
+    assert _tokens(block) <= INJECTION_TOKEN_BUDGET
+
+
+def test_corrections_are_not_starved_by_a_long_changed_files_list(store, ledger):
+    """Section priority holds under pressure. A refactor that touched two
+    hundred files must not be the reason a correction the user has repeated
+    five times falls out of the block."""
+    _finished_session(ledger, files=tuple(f"backend/app/file_{i}.py" for i in range(60)))
+    store.write(Fact(text="commit messages never carry a co-author trailer",
+                     kind=Kind.FEEDBACK, confidence=0.95))
+    for i in range(30):
+        store.write(Fact(text=f"a project fact number {i} " + "with detail " * 20,
+                         scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+
+    block = recall(store, scope=SCOPE)
+
+    assert "co-author" in block
+
+
+@r3
+def test_one_fact_longer_than_the_whole_budget_is_truncated_not_dropped(store):
+    """A block that disappears because one row is enormous is a session that
+    starts knowing nothing, which is the failure mode every guard in this
+    path exists to avoid."""
+    from nenapu.observer import INJECTION_TOKEN_BUDGET
+
+    store.write(Fact(text="the deploy rule: " + "one more clause " * 4000,
+                     kind=Kind.FEEDBACK, confidence=0.95))
+
+    block = recall(store)
+
+    assert "the deploy rule" in block
+    assert _tokens(block) <= INJECTION_TOKEN_BUDGET
+
+
+@r3
+def test_short_facts_are_not_cut_at_twelve_when_the_budget_allows_more(store):
+    """The count cap was a proxy for cost. Once cost is measured directly, a
+    store of one-line facts should be allowed to send more of them."""
+    for i in range(30):
+        store.write(Fact(text=f"port {8000 + i} is taken", kind=Kind.ENVIRONMENT,
+                         confidence=0.9))
+
+    block = recall(store)
+
+    assert len(_fact_lines(block)) > 12
+
+
+@r3
+def test_the_measured_budget_is_written_down(store):
+    """The plan asks this task to answer the "Token cost" section of
+    IMPLEMENTATION_NOTES.md with a measured number rather than an intention."""
+    from pathlib import Path
+
+    from nenapu.observer import INJECTION_TOKEN_BUDGET
+
+    notes = (Path(__file__).resolve().parent.parent / "IMPLEMENTATION_NOTES.md").read_text()
+
+    assert str(INJECTION_TOKEN_BUDGET) in notes
+
+
+# ---------- R4 · anchored on the work at hand ----------
+
+
+def _touched(ledger, paths, *, scope=SCOPE, ago=DAY):
+    return _finished_session(ledger, scope=scope, files=tuple(paths), ago=ago,
+                             subject=None)
+
+
+@r4
+def test_two_sessions_in_one_repo_with_different_recent_files_differ(store, ledger):
+    """The mechanical reason the block reads as a dump: it is identical for
+    every session in a repo until the store itself changes."""
+    store.write(Fact(text="the bookings module owns the overlap constraint",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+    store.write(Fact(text="the invoices module rounds to two decimals",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+
+    _touched(ledger, ["backend/app/bookings.py"])
+    on_bookings = _known_lines(recall(store, scope=SCOPE))
+    _touched(ledger, ["backend/app/invoices.py"], ago=60.0)
+    on_invoices = _known_lines(recall(store, scope=SCOPE))
+
+    assert on_bookings and on_bookings != on_invoices
+
+
+@r4
+def test_a_fact_about_a_recently_edited_file_leads_the_others(store, ledger):
+    store.write(Fact(text="the invoices module rounds to two decimals",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.95))
+    store.write(Fact(text="the bookings module owns the overlap constraint",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+    _touched(ledger, ["backend/app/bookings.py"])
+
+    block = recall(store, scope=SCOPE)
+
+    assert block.index("bookings module") < block.index("invoices module")
+
+
+@r4
+def test_the_branch_is_part_of_the_anchor(store, ledger):
+    """`sessions.git_branch` is already recorded and already unused. Work on
+    `release-3` is different work from work on `main`."""
+    from nenapu.models import now
+
+    store.write(Fact(text="release-3 is cut from main every second Tuesday",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+    store.write(Fact(text="the invoices module rounds to two decimals",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.95))
+    session = ledger.start_session(agent="claude-code", project_scope=SCOPE, cwd="/repo",
+                                   git_branch="release-3", started_at=now() - 600)
+    ledger.end_session(session, ended_at=now() - 300)
+
+    block = recall(store, scope=SCOPE)
+
+    assert block.index("release-3") < block.index("invoices module")
+
+
+def test_the_anchor_does_not_reach_into_another_project(store, ledger):
+    """Anchoring reads the activity ledger, which spans every repo on the
+    machine. Scope is what keeps that from undoing the fix it already made."""
+    store.write(Fact(text="the portfolio site is deployed from netlify",
+                     scope=OTHER, kind=Kind.PROJECT, confidence=0.95))
+    store.write(Fact(text="the bookings module owns the overlap constraint",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.9))
+    _touched(ledger, ["portfolio/src/index.astro"], scope=OTHER)
+
+    block = recall(store, scope=SCOPE)
+
+    assert "netlify" not in block
+
+
+def test_corrections_still_lead_the_block(store, ledger):
+    """Anchoring reorders what follows the corrections; it does not demote
+    them. A correction the user repeated is still the most actionable line in
+    the block whatever files were edited yesterday."""
+    store.write(Fact(text="do not add a Claude co-author trailer", kind=Kind.FEEDBACK,
+                     confidence=0.7))
+    store.write(Fact(text="the bookings module owns the overlap constraint",
+                     scope=SCOPE, kind=Kind.PROJECT, confidence=0.95))
+    _touched(ledger, ["backend/app/bookings.py"])
+
+    block = recall(store, scope=SCOPE)
+
+    assert block.index("co-author") < block.index("bookings module")
+
+
+def test_with_no_activity_history_the_block_is_todays_block(store):
+    """A fresh store has no anchor to read, and must be unaffected — which is
+    what keeps every existing test in this file true."""
+    store.write(Fact(text="The repo uses uv.", kind=Kind.PROJECT, confidence=0.95))
+    store.write(Fact(text="Do not add a Claude co-author trailer.", kind=Kind.FEEDBACK,
+                     confidence=0.7))
+
+    block = recall(store, scope=SCOPE)
+
+    assert block.splitlines()[0] == f"# Memory (nenapu) — {SCOPE}"
+    assert "co-author" in block
+
+
+# ==========================================================================
+# Pre-written for the injection half of E7 · entity-anchored retrieval.
+#
+# R4 anchors the block on cwd, branch and recently edited files. E7 extends
+# that anchor through the entity graph — traverse `entity_edges` to depth 2
+# with per-hop decay, join through `fact_entities` to candidate facts — rather
+# than replacing it, which is why E7 depends on R4. The scoring half is pinned
+# in tests/test_store.py.
+#
+# Held until G9's verdict is recorded. The verdict also scopes the task: a
+# `coverage-problem` or a high injection unused-rate means anchoring is the
+# fix and vectors may never be needed.
+# ==========================================================================
+
+e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
+
+
+@e7
+def test_the_block_reaches_a_fact_about_a_neighbouring_file(store, ledger):
+    """Graph distance, not a second lexical pass: the session edited
+    `bookings.py`, and the fact worth injecting is about the module it is
+    always changed with."""
+    from nenapu.entities import EntityGraph
+
+    graph = EntityGraph(store.conn)
+    neighbour_fact, _ = store.write(Fact(text="availability windows are half-open",
+                                         scope=SCOPE, kind=Kind.PROJECT, confidence=0.6))
+    store.write(Fact(text="an unrelated fact about the mailer", scope=SCOPE,
+                     kind=Kind.PROJECT, confidence=0.6))
+    edited = graph.upsert(kind="file", name="backend/app/bookings.py", scope=SCOPE)
+    neighbour = graph.upsert(kind="file", name="backend/app/availability.py", scope=SCOPE)
+    graph.link(edited.id, neighbour.id, kind="touched_with", source="observed")
+    graph.attach(neighbour_fact.id, neighbour.id, role="subject", source="path")
+    _touched(ledger, ["backend/app/bookings.py"])
+
+    block = recall(store, scope=SCOPE)
+
+    assert block.index("availability windows") < block.index("unrelated fact about the mailer")
+
+
+@e7
+def test_proximity_does_not_promote_a_falsified_fact(store, ledger):
+    """The belief layer stays after ranking, as filter and warning, exactly as
+    the block does today. Being near the work is not a reason to believe
+    something whose foundation collapsed."""
+    from nenapu.entities import EntityGraph
+    from nenapu.models import Status
+
+    graph = EntityGraph(store.conn)
+    doubted, _ = store.write(Fact(text="availability windows are half-open", scope=SCOPE,
+                                  kind=Kind.PROJECT, confidence=0.9))
+    store.set_status(doubted.id, Status.SUSPECT)
+    entity = graph.upsert(kind="file", name="backend/app/bookings.py", scope=SCOPE)
+    graph.attach(doubted.id, entity.id, role="subject", source="path")
+    _touched(ledger, ["backend/app/bookings.py"])
+
+    block = recall(store, scope=SCOPE)
+
+    assert "falsified" in block.lower()
+    assert block.index("falsified") < block.index("availability windows")
+
+
+@e7
+def test_the_anchor_does_not_traverse_out_of_the_project(store, ledger):
+    """Traversal must not cross scope except through `global`, or this
+    recreates the "right fact, wrong project" failure scoping already fixed."""
+    from nenapu.entities import EntityGraph
+
+    graph = EntityGraph(store.conn)
+    elsewhere, _ = store.write(Fact(text="the portfolio deploys from netlify",
+                                    scope=OTHER, kind=Kind.PROJECT, confidence=0.9))
+    here = graph.upsert(kind="file", name="backend/app/bookings.py", scope=SCOPE)
+    there = graph.upsert(kind="file", name="portfolio/src/index.astro", scope=OTHER)
+    graph.link(here.id, there.id, kind="touched_with", source="observed")
+    graph.attach(elsewhere.id, there.id, role="subject", source="path")
+    _touched(ledger, ["backend/app/bookings.py"])
+
+    block = recall(store, scope=SCOPE)
+
+    assert "netlify" not in block
+
+
+def test_a_store_with_no_entities_renders_the_block_it_renders_today(store, ledger):
+    """With no entity data the scoring degrades to R4's behaviour, which is
+    what keeps every existing test in this file true unmodified."""
+    store.write(Fact(text="Bookings use an overlap constraint.", scope=SCOPE,
+                     kind=Kind.PROJECT, confidence=0.9))
+    _finished_session(ledger)
+
+    block = recall(store, scope=SCOPE)
+
+    assert "Where you left off" in block
+    assert "overlap constraint" in block

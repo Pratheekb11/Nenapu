@@ -204,3 +204,336 @@ def test_a_filesystem_that_cannot_chmod_still_opens(tmp_path, monkeypatch):
     conn = connect(str(tmp_path / "nenapu.db"))
 
     assert Store(conn).search("anything") == []
+
+
+# ==========================================================================
+# Pre-written for R1 · candidate generation, and E7 · entity-anchored recall.
+#
+# R1 fixes three faults in `Store.search`, all deterministic and none of them
+# waiting on vectors:
+#
+#   1. the query is pure OR — `_fts_query` joins every term with OR, so a
+#      twelve-term query matches any fact sharing one word, and
+#      `relevant_memory` feeds it exactly that;
+#   2. `key` and `tags_csv` are indexed but never weighted — bm25 treats a
+#      match on a fact's key the same as a match on a word in its prose;
+#   3. the candidate pool is bm25-ordered only — `ORDER BY rank LIMIT limit*5`
+#      then rescored, so confidence can re-rank what lexical search already
+#      liked but can never retrieve what it missed.
+#
+# Plus the silent failure at the recency fallback: when FTS finds nothing the
+# code returns arbitrary recent facts scored a flat 0.3 *presented as hits*,
+# and in the MCP path those get logged as recalls with a query attached —
+# poisoning the exact population G7 uses to measure ranking.
+#
+# E7 adds a proximity term over the entity graph, held until G9's verdict is
+# recorded:
+#
+#     0.45·lexical + 0.35·confidence + 0.1·usage + 0.10·proximity
+#
+# with two constraints: the belief layer stays *after* ranking (proximity must
+# never promote a falsified fact), and traversal must not cross scope except
+# through `global`.
+#
+# Assumed seams: `store.search(..., near=[...])` carries the anchor E7 scores
+# proximity from, `explain` grows `proximity`, and the weights live in one
+# named place so a reader can check them against the plan.
+# ==========================================================================
+
+r1 = pytest.mark.xfail(strict=True, reason="R1 not implemented yet: remove when it lands")
+e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
+
+
+def _texts(hits):
+    return [fact.text for fact, _score, _why in hits]
+
+
+# ---------- R1 · what the query is allowed to match ----------
+
+
+@r1
+def test_a_multi_term_query_does_not_match_on_one_word(store):
+    """`" OR ".join(terms)` is why a session about deploys retrieves a fact
+    about a coffee machine: they share the word "cache"."""
+    store.write(Fact(text="the deploy script lives in tools/ship.sh"))
+    store.write(Fact(text="the coffee machine has a cache of beans"))
+
+    hits = store.search("deploy staging cache invalidation policy")
+
+    assert "the coffee machine has a cache of beans" not in _texts(hits)
+
+
+@r1
+def test_a_term_too_common_to_discriminate_does_not_drive_the_match(store):
+    """A word that appears in most of the store narrows nothing. Matching on
+    it is how twelve slots fill with everything."""
+    for i in range(30):
+        store.write(Fact(text=f"the service number {i} runs somewhere in the cluster"))
+    store.write(Fact(text="the badger enclosure needs a new latch"))
+
+    hits = store.search("service badger")
+
+    assert _texts(hits) == ["the badger enclosure needs a new latch"]
+
+
+@r1
+def test_a_phrase_query_matches_the_phrase(store):
+    """Two words next to each other are a different claim from the same two
+    words in one paragraph."""
+    store.write(Fact(text="the connection pool is capped at 20"))
+    store.write(Fact(text="the connection is over TLS and the pool table is in the office"))
+
+    hits = store.search('"connection pool"')
+
+    assert _texts(hits) == ["the connection pool is capped at 20"]
+
+
+@r1
+def test_a_key_match_outranks_an_equal_prose_match(store):
+    """197 facts carry dotted keys. A query that matches a fact's key is a
+    much stronger signal than one matching a word in its prose, and bm25
+    treats the two columns alike."""
+    keyed, _ = store.write(Fact(text="the head revision is 7f3a91c",
+                                key="backend.alembic.head", kind=Kind.ENVIRONMENT))
+    store.write(Fact(text="alembic head output is what the deploy check reads"))
+
+    hits = store.search("backend.alembic.head")
+
+    assert hits[0][0].id == keyed.id
+    assert hits[0][2]["key_match"] is True
+
+
+@r1
+def test_a_tag_match_is_weighted_like_a_key_match(store):
+    """`tags_csv` is in the FTS table and has never been weighted either. A
+    fact carrying the tag is a stronger answer than one that happens to say
+    the words in a sentence."""
+    tagged, _ = store.write(Fact(text="run the migration before the deploy",
+                                 tags=["release-checklist"]))
+    store.write(Fact(text="the release checklist lives in the wiki, "
+                          "and the release checklist is reviewed monthly"))
+
+    hits = store.search("release-checklist")
+
+    assert hits[0][0].id == tagged.id
+    assert hits[0][2]["tag_match"] is True
+
+
+@r1
+def test_a_believed_fact_outside_the_lexical_pool_can_still_surface(store):
+    """The structural fault: the pool is `ORDER BY rank LIMIT limit*5`, so
+    confidence is a re-ranker over a lexical pool and never a retriever. A
+    fact ranked 51st lexically can never surface however strongly it is
+    believed."""
+    for i in range(40):
+        store.write(Fact(text=f"cache note {i}", kind=Kind.PROJECT,
+                         origin=Origin.AGENT_INFERRED, confidence=0.4))
+    believed, _ = store.write(Fact(
+        text="the cache is invalidated by hand after every release, which the "
+             "team has been bitten by twice and now checks on the release call",
+        origin=Origin.USER_STATED, confidence=0.95,
+    ))
+
+    hits = store.search("cache", limit=5)
+
+    assert believed.id in [fact.id for fact, _s, _w in hits]
+
+
+@r1
+def test_an_unmatched_query_does_not_look_like_a_match(store):
+    """The silent failure at the fallback: an unmatched query returns
+    arbitrary recent facts at a flat 0.3, presented as hits. In the MCP path
+    they are logged as recalls with a query attached, which poisons the exact
+    population the gate reads to measure ranking."""
+    store.write(Fact(text="the deploy script lives in tools/ship.sh"))
+    store.write(Fact(text="the badger enclosure needs a new latch"))
+
+    hits = store.search("xyzzy plugh frobnicate")
+
+    assert hits == [] or all(why.get("fallback") for _f, _s, why in hits)
+
+
+@r1
+def test_the_fallback_is_labelled_where_a_caller_can_see_it(store):
+    """Either answer is defensible — return nothing, or return the fallback
+    marked as such. What is not defensible is a recency guess wearing the
+    clothes of a lexical hit."""
+    store.write(Fact(text="the deploy script lives in tools/ship.sh"))
+
+    hits = store.search("xyzzy plugh frobnicate")
+
+    for _fact, _score, why in hits:
+        assert why["fallback"] is True
+        assert why["lexical"] == 0.0
+
+
+@r1
+def test_an_empty_query_is_not_a_search(store):
+    store.write(Fact(text="the deploy script lives in tools/ship.sh"))
+
+    hits = store.search("   ")
+
+    assert hits == [] or all(why.get("fallback") for _f, _s, why in hits)
+
+
+def test_scoping_still_holds_over_the_wider_pool(store):
+    """R1 widens what can be retrieved, and the scope filter is what keeps
+    "right fact, wrong project" fixed while it does."""
+    store.write(Fact(text="this repo runs on port 8080", scope="repo:here@aaaaaaaa"))
+    store.write(Fact(text="that repo runs on port 5544", scope="repo:there@bbbbbbbb"))
+
+    hits = store.search("port", scope=["global", "repo:here@aaaaaaaa"])
+
+    assert _texts(hits) == ["this repo runs on port 8080"]
+
+
+def test_a_retired_fact_is_still_not_retrievable(store):
+    """Whatever the pool is built from, status is what decides membership."""
+    fact, _ = store.write(Fact(text="the deploy script lives in tools/ship.sh"))
+    store.forget(fact.id)
+
+    assert store.search("deploy script") == []
+
+
+# ---------- E7 · proximity, and what it is not allowed to do ----------
+
+
+def _entity_fact(store, *, text, path, scope="global", role="subject"):
+    from nenapu.entities import EntityGraph
+
+    fact, _ = store.write(Fact(text=text, scope=scope))
+    graph = EntityGraph(store.conn)
+    entity = graph.upsert(kind="file", name=path, scope=scope)
+    graph.attach(fact.id, entity.id, role=role, source="path")
+    return fact, entity
+
+
+@e7
+def test_the_scoring_weights_are_the_ones_the_plan_named(store):
+    """Weights on the hottest path in the system, written down in one place so
+    a change to them is a change someone has to make on purpose."""
+    from nenapu.store import SEARCH_WEIGHTS
+
+    assert SEARCH_WEIGHTS == {
+        "lexical": 0.45, "confidence": 0.35, "usage": 0.1, "proximity": 0.10,
+    }
+    assert sum(SEARCH_WEIGHTS.values()) == pytest.approx(1.0)
+
+
+@e7
+def test_a_fact_about_a_nearby_entity_outranks_an_equal_one_far_away(store):
+    """R4 anchors injection on cwd, branch and recently edited files. E7
+    extends that anchor through the entity graph, so a fact about the file
+    being worked on beats an identically believed fact about another."""
+    near, _ = _entity_fact(store, text="the handler validates the token twice",
+                           path="services/auth/routes.py")
+    far, _ = _entity_fact(store, text="the handler validates the token twice over",
+                          path="services/billing/invoices.py")
+
+    hits = store.search("handler validates token", near=["services/auth/routes.py"])
+    ranked = [fact.id for fact, _s, _w in hits]
+
+    assert ranked.index(near.id) < ranked.index(far.id)
+
+
+@e7
+def test_proximity_is_reported_in_the_explanation(store):
+    """`explain` is how a user is shown why a memory surfaced. A term that
+    moves the ranking and does not appear there is a silent reranker."""
+    _entity_fact(store, text="the handler validates the token twice",
+                 path="services/auth/routes.py")
+
+    hits = store.search("handler", near=["services/auth/routes.py"])
+
+    assert hits[0][2]["proximity"] > 0
+
+
+@e7
+def test_proximity_reaches_one_hop_out_with_decay(store):
+    """Depth 2 with per-hop decay: a fact about a file that is touched with
+    the anchor is nearer than an unrelated one, and further than the anchor's
+    own facts."""
+    from nenapu.entities import EntityGraph
+
+    anchor, anchor_entity = _entity_fact(store, text="the login handler is here",
+                                         path="services/auth/routes.py")
+    neighbour, neighbour_entity = _entity_fact(store, text="the login handler is tested here",
+                                               path="services/auth/test_routes.py")
+    stranger, _ = _entity_fact(store, text="the login handler is unrelated here",
+                               path="tools/unrelated.py")
+    EntityGraph(store.conn).link(anchor_entity.id, neighbour_entity.id,
+                                 kind="touched_with", source="observed")
+
+    hits = store.search("login handler", near=["services/auth/routes.py"])
+    by_id = {fact.id: why["proximity"] for fact, _s, why in hits}
+
+    assert by_id[anchor.id] > by_id[neighbour.id] > by_id[stranger.id]
+
+
+@e7
+def test_traversal_does_not_cross_scope(store):
+    """Scoping already had to fix "right fact, wrong project" once. A graph
+    walk that ignores scope recreates it one layer down."""
+    _entity_fact(store, text="the handler validates the token", path="app/routes.py",
+                 scope="repo:here@aaaaaaaa")
+    _entity_fact(store, text="the handler validates the token elsewhere",
+                 path="app/routes.py", scope="repo:there@bbbbbbbb")
+
+    hits = store.search("handler validates token", scope=["global", "repo:here@aaaaaaaa"],
+                        near=["app/routes.py"])
+
+    assert all(fact.scope in ("global", "repo:here@aaaaaaaa") for fact, _s, _w in hits)
+
+
+@e7
+def test_a_global_entity_is_still_reachable_from_a_project(store):
+    """The one crossing that is allowed, because global facts are meant to
+    surface everywhere."""
+    everywhere, _ = _entity_fact(store, text="commits never carry a co-author trailer",
+                                 path="tools/commit-check.sh", scope="global")
+
+    hits = store.search("commits co-author trailer",
+                        scope=["global", "repo:here@aaaaaaaa"],
+                        near=["tools/commit-check.sh"])
+
+    assert everywhere.id in [fact.id for fact, _s, _w in hits]
+
+
+@e7
+def test_proximity_never_promotes_a_falsified_fact(store):
+    """The belief layer stays *after* ranking, as filter and warning, exactly
+    as `recall_context` does today."""
+    suspect, _ = _entity_fact(store, text="the handler validates the token twice",
+                              path="services/auth/routes.py")
+    store.set_status(suspect.id, Status.SUSPECT)
+    sound, _ = _entity_fact(store, text="the handler validates the token once",
+                            path="tools/unrelated.py")
+
+    hits = store.search("handler validates token", near=["services/auth/routes.py"],
+                        min_confidence=0.4)
+    ranked = [fact.id for fact, _s, _w in hits]
+
+    assert suspect.id not in ranked or ranked.index(sound.id) < ranked.index(suspect.id)
+
+
+@e7
+def test_a_suspect_fact_keeps_its_warning_however_near_it_is(store):
+    suspect, _ = _entity_fact(store, text="the handler validates the token twice",
+                              path="services/auth/routes.py")
+    store.set_status(suspect.id, Status.SUSPECT)
+
+    hits = store.search("handler validates token", near=["services/auth/routes.py"])
+
+    assert any(fact.id == suspect.id and why.get("suspect_reason") is not None
+               for fact, _s, why in hits) or hits == []
+
+
+def test_search_without_an_anchor_is_unchanged(store):
+    """With no entity data and no anchor, scoring degrades to what it does
+    today, which is what keeps every existing test in this file true."""
+    store.write(Fact(text="The API runs on port 8080", kind=Kind.ENVIRONMENT,
+                     key="api.port"))
+
+    hits = store.search("port")
+
+    assert hits and "8080" in hits[0][0].text
