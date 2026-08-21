@@ -497,6 +497,14 @@ def _proposed_id(item: dict) -> int | None:
 # a fact is believed can defend one it recognises, and `used` is the verdict
 # that moves confidence upward.
 
+# How many of a session's pending recalls one extraction grades. `Ledger.pending`
+# defaults to 50, which is a listing default rather than a grading one: a
+# resumed session can hold more, and reading fewer than were injected would
+# silently leave the rest ungraded. Bounded all the same, because every one of
+# them is a line in the prompt. What is left over stays pending for a later
+# replay, which is a no-op on everything already graded.
+GRADED_RECALL_LIMIT = 60
+
 GRADE_VERDICTS = {
     "used": Outcome.GOOD,
     "misled": Outcome.BAD,
@@ -702,7 +710,8 @@ def observe_transcript(
     # Read before the call, so the block and the grades that come back are the
     # same set. Without a session id there is no injected set to grade, and
     # grading by fact id alone would reach across every session in the store.
-    injected = store.ledger.pending(session_id=session_id) if session_id else []
+    injected = (store.ledger.pending(session_id=session_id, limit=GRADED_RECALL_LIMIT)
+                if session_id else [])
     # Which scope this session's entities belong in, resolved once: the same
     # two-tier rule the facts below are written by.
     entity_scope = scope or scope_for(Kind.PROJECT, cwd)
