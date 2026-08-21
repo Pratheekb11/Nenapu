@@ -633,6 +633,15 @@ This is the frozen baseline. Anything that changes what gets injected —
 diversity at selection, a token budget, anchoring on the work at hand,
 entity-anchored retrieval — is measured against these numbers.
 
+What the work after the baseline did to the block, measured on the same
+store on 2026-08-22: 841 estimated tokens before, 689 after, with the
+corrections leading and the facts that name the files this repo was last
+edited in ranked above the rest. The injection unused-rate is not comparable
+yet and is not claimed to be: it needs sessions that ran against the new
+block, and the ones in the ledger all ran against the old one. Re-run
+`nenapu retrieval` after a week of sessions and compare against the
+injection row above.
+
 Two caveats recorded rather than smoothed over. 21 of the 28 replayable
 sessions were graded; the last 7 failed on `You've hit your session limit`
 and their recalls are still pending, so a later replay adds to this

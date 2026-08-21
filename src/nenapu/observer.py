@@ -37,6 +37,7 @@ from typing import Callable
 
 from .db import commit, transaction
 from .distill import _similarity
+from .entities import proximity_scores
 from .llm import Backend, LLMUnavailable, detect_backend, structured
 from .models import (
     EntityEdgeKind,
@@ -957,6 +958,24 @@ def _anchor_terms(conn, scope: str | None, cwd: str | None) -> set[str]:
     return {t.lower() for t in terms}
 
 
+def _anchor_paths(conn, scope: str | None) -> list[str]:
+    """The paths recent sessions edited, as the entity graph spells them.
+
+    R4 reads the words out of these; E7 walks the graph from them, so the
+    full path is what is wanted here rather than the basename.
+    """
+    if not scope:
+        return []
+    from .activity import ActivityLedger
+
+    seen: list[str] = []
+    for event in ActivityLedger(conn).file_events_for_scope(scope,
+                                                            limit=ANCHOR_FILE_EVENTS):
+        if event["path"] not in seen:
+            seen.append(event["path"])
+    return seen
+
+
 def _anchor_score(fact: Fact, terms: set[str]) -> int:
     """How much of the work at hand this fact names."""
     if not terms:
@@ -1157,10 +1176,20 @@ def recall_context(
     # them. A correction the user has repeated is still the most actionable
     # line in the block whatever files were edited yesterday.
     anchor = _anchor_terms(store.conn, scope, cwd)
+    # E7 extends the same anchor one layer out: a fact about the module this
+    # one is always edited with is about the work at hand too. Traversal is
+    # scoped, so it cannot reach into another project. With no entity data
+    # every score here is zero and the ordering is R4's.
+    proximity = proximity_scores(store.conn, _anchor_paths(store.conn, scope),
+                                 scopes) if scope else {}
+
+    def _relevance(fact: Fact) -> float:
+        return _anchor_score(fact, anchor) + proximity.get(fact.id, 0.0)
+
     sound.sort(key=lambda pair: (pair[0].kind != Kind.FEEDBACK,
-                                 -_anchor_score(pair[0], anchor),
+                                 -_relevance(pair[0]),
                                  -pair[0].occurrences, -pair[1]))
-    suspect.sort(key=lambda pair: (-_anchor_score(pair[0], anchor), -pair[1]))
+    suspect.sort(key=lambda pair: (-_relevance(pair[0]), -pair[1]))
     # `limit` is still honoured when a caller sets one, but nothing sets one by
     # default any more: the token budget is what decides how much of the store
     # a session is handed.

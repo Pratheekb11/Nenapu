@@ -119,7 +119,6 @@ def test_writing_many_facts_stays_linear(tmp_path):
 # session.
 # ==========================================================================
 
-e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
 
 
 def test_the_pool_union_does_not_slow_recall_down(tmp_path):
@@ -150,7 +149,6 @@ def test_a_multi_term_query_stays_cheap(tmp_path):
     assert time.time() - started < 1.0
 
 
-@e7
 def test_entity_anchored_recall_stays_within_budget(tmp_path):
     """Depth-2 traversal with per-hop decay, per query, on a store with an
     entity per touched path — 647 of them in the live store today."""
@@ -175,7 +173,6 @@ def test_entity_anchored_recall_stays_within_budget(tmp_path):
     assert (time.time() - started) / 5 < 0.5
 
 
-@e7
 def test_an_unanchored_query_pays_nothing_for_the_entity_tier(tmp_path):
     """A store with entities in it must not make every unanchored recall walk
     a graph it was not asked about."""

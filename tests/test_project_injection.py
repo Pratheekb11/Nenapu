@@ -737,7 +737,6 @@ def test_with_no_activity_history_the_block_is_todays_block(store):
 e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
 
 
-@e7
 def test_the_block_reaches_a_fact_about_a_neighbouring_file(store, ledger):
     """Graph distance, not a second lexical pass: the session edited
     `bookings.py`, and the fact worth injecting is about the module it is
@@ -760,7 +759,6 @@ def test_the_block_reaches_a_fact_about_a_neighbouring_file(store, ledger):
     assert block.index("availability windows") < block.index("unrelated fact about the mailer")
 
 
-@e7
 def test_proximity_does_not_promote_a_falsified_fact(store, ledger):
     """The belief layer stays after ranking, as filter and warning, exactly as
     the block does today. Being near the work is not a reason to believe
@@ -782,7 +780,6 @@ def test_proximity_does_not_promote_a_falsified_fact(store, ledger):
     assert block.index("falsified") < block.index("availability windows")
 
 
-@e7
 def test_the_anchor_does_not_traverse_out_of_the_project(store, ledger):
     """Traversal must not cross scope except through `global`, or this
     recreates the "right fact, wrong project" failure scoping already fixed."""

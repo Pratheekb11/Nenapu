@@ -240,7 +240,6 @@ def test_a_filesystem_that_cannot_chmod_still_opens(tmp_path, monkeypatch):
 # named place so a reader can check them against the plan.
 # ==========================================================================
 
-e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
 
 
 def _texts(hits):
@@ -398,7 +397,6 @@ def _entity_fact(store, *, text, path, scope="global", role="subject"):
     return fact, entity
 
 
-@e7
 def test_the_scoring_weights_are_the_ones_the_plan_named(store):
     """Weights on the hottest path in the system, written down in one place so
     a change to them is a change someone has to make on purpose."""
@@ -410,7 +408,6 @@ def test_the_scoring_weights_are_the_ones_the_plan_named(store):
     assert sum(SEARCH_WEIGHTS.values()) == pytest.approx(1.0)
 
 
-@e7
 def test_a_fact_about_a_nearby_entity_outranks_an_equal_one_far_away(store):
     """R4 anchors injection on cwd, branch and recently edited files. E7
     extends that anchor through the entity graph, so a fact about the file
@@ -426,7 +423,6 @@ def test_a_fact_about_a_nearby_entity_outranks_an_equal_one_far_away(store):
     assert ranked.index(near.id) < ranked.index(far.id)
 
 
-@e7
 def test_proximity_is_reported_in_the_explanation(store):
     """`explain` is how a user is shown why a memory surfaced. A term that
     moves the ranking and does not appear there is a silent reranker."""
@@ -438,7 +434,6 @@ def test_proximity_is_reported_in_the_explanation(store):
     assert hits[0][2]["proximity"] > 0
 
 
-@e7
 def test_proximity_reaches_one_hop_out_with_decay(store):
     """Depth 2 with per-hop decay: a fact about a file that is touched with
     the anchor is nearer than an unrelated one, and further than the anchor's
@@ -460,7 +455,6 @@ def test_proximity_reaches_one_hop_out_with_decay(store):
     assert by_id[anchor.id] > by_id[neighbour.id] > by_id[stranger.id]
 
 
-@e7
 def test_traversal_does_not_cross_scope(store):
     """Scoping already had to fix "right fact, wrong project" once. A graph
     walk that ignores scope recreates it one layer down."""
@@ -475,7 +469,6 @@ def test_traversal_does_not_cross_scope(store):
     assert all(fact.scope in ("global", "repo:here@aaaaaaaa") for fact, _s, _w in hits)
 
 
-@e7
 def test_a_global_entity_is_still_reachable_from_a_project(store):
     """The one crossing that is allowed, because global facts are meant to
     surface everywhere."""
@@ -489,7 +482,6 @@ def test_a_global_entity_is_still_reachable_from_a_project(store):
     assert everywhere.id in [fact.id for fact, _s, _w in hits]
 
 
-@e7
 def test_proximity_never_promotes_a_falsified_fact(store):
     """The belief layer stays *after* ranking, as filter and warning, exactly
     as `recall_context` does today."""
@@ -506,7 +498,6 @@ def test_proximity_never_promotes_a_falsified_fact(store):
     assert suspect.id not in ranked or ranked.index(sound.id) < ranked.index(suspect.id)
 
 
-@e7
 def test_a_suspect_fact_keeps_its_warning_however_near_it_is(store):
     suspect, _ = _entity_fact(store, text="the handler validates the token twice",
                               path="services/auth/routes.py")

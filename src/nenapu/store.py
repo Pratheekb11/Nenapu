@@ -39,12 +39,21 @@ from .models import (
     now,
     row_to_fact,
 )
+from .entities import proximity_scores
 from .outcomes import Ledger, outcome_signal
 from .db import commit
 from .db import transaction as db_transaction
 
 DAY = 86400.0
 CONFIDENCE_FLOOR = 0.05
+
+# What recall ranks on, in one place, because this is the hottest path in the
+# system and a change to it should be a change someone made on purpose.
+# Proximity is the entity tier's contribution: how near a fact is to what the
+# session is working on. It is the smallest term deliberately — being near the
+# work is a reason to prefer a fact, never a reason to believe one, and the
+# belief layer still filters and warns after ranking.
+SEARCH_WEIGHTS = {"lexical": 0.45, "confidence": 0.35, "usage": 0.1, "proximity": 0.10}
 
 # Write contention: retry with jittered backoff rather than surfacing a lock
 # error to a user who only asked to remember something.
@@ -672,6 +681,7 @@ class Store:
         mark_used: bool = True,
         session_id: str | None = None,
         log_recall: bool = True,
+        near: Sequence[str] | None = None,
     ) -> list[tuple[Fact, float, dict]]:
         """Rank by lexical match *and* current believability.
 
@@ -699,13 +709,26 @@ class Store:
                 for f in self.list_facts(scope=scope, status=statuses, limit=limit * 5)
             ]
 
+        # E7: only an anchored query pays for the entity tier. A store with
+        # entities in it must not make every unanchored recall walk a graph it
+        # was not asked about.
+        proximity = (
+            proximity_scores(self.conn, near, _scope_list(scope)) if near else {}
+        )
+
         at = now()
         scored: list[tuple[Fact, float, dict]] = []
         for candidate in candidates:
             fact, lex = candidate.fact, candidate.lexical
             conf = effective_confidence(fact, at)
             usage = min(1.0, math.log1p(fact.use_count) / math.log(11))  # saturates ~10 uses
-            score = 0.5 * lex + 0.4 * conf + 0.1 * usage
+            near_score = proximity.get(fact.id, 0.0)
+            score = (
+                SEARCH_WEIGHTS["lexical"] * lex
+                + SEARCH_WEIGHTS["confidence"] * conf
+                + SEARCH_WEIGHTS["usage"] * usage
+                + SEARCH_WEIGHTS["proximity"] * near_score
+            )
             if conf < min_confidence:
                 continue
             scored.append(
@@ -716,13 +739,14 @@ class Store:
                         "lexical": round(lex, 3),
                         "confidence": round(conf, 3),
                         "usage": round(usage, 3),
+                        "proximity": round(near_score, 3),
                         "key_match": candidate.key_match,
                         "tag_match": candidate.tag_match,
                         "fallback": fallback,
                         "age_days": round((at - (fact.last_verified_at or fact.created_at)) / DAY, 1),
                         "verify_status": fact.verify_status,
                         "track_record": f"{fact.good_recalls}/{fact.good_recalls + fact.bad_recalls}",
-                        "suspect_reason": fact.suspect_reason,
+                        "suspect_reason": _suspect_reason(fact),
                     },
                 )
             )
@@ -878,6 +902,27 @@ def _parse_query(raw: str) -> tuple[list[str], list[str]]:
             continue
         terms.append(lowered)
     return phrases, terms[:MAX_QUERY_TERMS]
+
+
+def _suspect_reason(fact: Fact) -> str | None:
+    """The warning a suspect fact carries into a result.
+
+    A cascade records why. `set_status` does not, and a fact that surfaces
+    marked suspect with an empty explanation reads as a sound one — which is
+    exactly the case E7 makes more likely, since proximity can bring a
+    doubted fact near the top of what was retrieved.
+    """
+    if fact.suspect_reason:
+        return fact.suspect_reason
+    if fact.status == Status.SUSPECT:
+        return "marked suspect, no reason recorded"
+    return None
+
+
+def _scope_list(scope: str | Sequence[str] | None) -> list[str]:
+    if not scope:
+        return []
+    return [scope] if isinstance(scope, str) else list(scope)
 
 
 def _too_common(frequency: int, total: int) -> bool:

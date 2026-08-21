@@ -805,3 +805,90 @@ def reward_edges_for_grades(store) -> int:
             commit(conn)
         paid += 1
     return paid
+
+
+# ---------- E7 · proximity, from graph distance ----------
+#
+# What "near the work at hand" means once the anchor is a set of names rather
+# than a set of words. R4 prefers a fact that *names* an edited file; this
+# reaches one hop further, to the facts about the things that file is worked
+# on with.
+#
+# Two constraints hold it in. Traversal stops at depth 2, because past that
+# every node in a repo is reachable from every other and proximity stops
+# meaning anything. And it does not cross scope except through `global`, or it
+# recreates the "right fact, wrong project" failure scoping already fixed.
+
+PROXIMITY_DEPTH = 2
+
+# Per hop, so the anchor's own facts outrank its neighbours' and theirs
+# outrank the ones two steps out.
+PROXIMITY_DECAY = 0.5
+
+
+def _entities_named(conn: sqlite3.Connection, names, scopes) -> list[int]:
+    if not names:
+        return []
+    name_marks = ",".join("?" * len(names))
+    sql = f"SELECT id FROM entities WHERE name IN ({name_marks})"
+    args = list(names)
+    if scopes:
+        scope_marks = ",".join("?" * len(scopes))
+        sql += f" AND scope IN ({scope_marks})"
+        args += list(scopes)
+    return [r["id"] for r in conn.execute(sql, args)]
+
+
+def _in_scope(conn: sqlite3.Connection, entity_ids: list[int], scopes) -> set[int]:
+    if not scopes or not entity_ids:
+        return set(entity_ids)
+    marks = ",".join("?" * len(entity_ids))
+    scope_marks = ",".join("?" * len(scopes))
+    rows = conn.execute(
+        f"SELECT id FROM entities WHERE id IN ({marks}) AND scope IN ({scope_marks})",
+        [*entity_ids, *scopes],
+    )
+    return {r["id"] for r in rows}
+
+
+def proximity_scores(conn: sqlite3.Connection, names, scopes=None, *,
+                     depth: int = PROXIMITY_DEPTH) -> dict[int, float]:
+    """How near each fact is to the anchor, as fact id to 0..1.
+
+    The anchor is a set of entity names — the paths a session has been
+    editing. Facts attached to those entities score 1.0, facts attached to
+    what they are edited with score `PROXIMITY_DECAY`, and so on to `depth`.
+    A fact the walk never reaches simply has no entry.
+    """
+    scopes = list(scopes) if scopes else []
+    anchors = _entities_named(conn, list(names or []), scopes)
+    if not anchors:
+        return {}
+
+    graph = EntityGraph(conn)
+    reach: dict[int, float] = {}
+    for anchor in anchors:
+        # An anchor spelled one way must reach facts attached to another, so
+        # the walk starts from the node that owns the spelling.
+        canonical = graph.canonical(anchor)
+        start = canonical.id if canonical else anchor
+        reach[start] = 1.0
+        for other, hops in graph.neighbours(start, depth=depth):
+            reach[other] = max(reach.get(other, 0.0), PROXIMITY_DECAY ** hops)
+
+    allowed = _in_scope(conn, list(reach), scopes)
+    reachable = {eid: score for eid, score in reach.items() if eid in allowed}
+    if not reachable:
+        return {}
+
+    marks = ",".join("?" * len(reachable))
+    rows = conn.execute(
+        f"SELECT fact_id, entity_id FROM fact_entities WHERE entity_id IN ({marks})",
+        list(reachable),
+    )
+    scores: dict[int, float] = {}
+    for row in rows:
+        score = reachable[row["entity_id"]]
+        if score > scores.get(row["fact_id"], 0.0):
+            scores[row["fact_id"]] = score
+    return scores
