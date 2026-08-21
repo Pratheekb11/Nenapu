@@ -128,3 +128,101 @@ def test_backfill_directory_processes_every_transcript(tmp_path, ledger):
     assert count == 3
     assert ledger.get_session("s0") is not None
     assert ledger.get_session("s2") is not None
+
+
+# ==========================================================================
+# When the backfilled session says it happened
+#
+# Found in use on 2026-08-22, diagnosing why `nenapu retrieval` reported a
+# coverage problem. A backfilled session row was stamped with the moment the
+# backfill ran, not with the moment the session happened, so 193 sessions
+# from weeks of history looked like they had all started that afternoon.
+#
+# Three things read `sessions.started_at` and all three were wrong because of
+# it: the retrieval gate's coverage measure, which excludes sessions that
+# predate the hook era and so counted every one of them as a live session
+# given nothing; `sessions_for_scope`, which orders by it, so "Where you left
+# off" could point at a session from three weeks ago; and the rollups, which
+# age the ledger by it.
+#
+# The transcript's own clock is already parsed — `capture._timestamp` reads
+# it for every file event, precisely so that "a backfill of months of history
+# does not look like one busy afternoon".
+# ==========================================================================
+
+
+def _at(ts: str) -> float:
+    from datetime import datetime, timezone
+
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(
+        tzinfo=timezone.utc).timestamp()
+
+
+def test_a_backfilled_session_starts_when_the_transcript_says_it_did(tmp_path, ledger):
+    from nenapu.backfill import backfill_transcript
+
+    path = tmp_path / "s-old.jsonl"
+    path.write_text("\n".join([
+        _line("s-old", "user", text="what broke", ts="2026-07-01T09:00:00Z"),
+        _line("s-old", "assistant", tool="Edit", file_path="app/a.py",
+              ts="2026-07-01T09:05:00Z"),
+    ]) + "\n")
+
+    row_id = backfill_transcript(ledger, path, agent="claude-code")
+
+    assert ledger.get_session("s-old")["started_at"] == pytest.approx(
+        _at("2026-07-01T09:00:00Z"), abs=1)
+    assert row_id is not None
+
+
+def test_a_backfill_of_months_does_not_look_like_one_afternoon(tmp_path, ledger):
+    """The property the ingestion-time stamp destroyed: two sessions six
+    weeks apart have to stay six weeks apart in the ledger."""
+    from nenapu.backfill import backfill_transcript
+
+    for name, ts in (("s-june", "2026-06-01T12:00:00Z"), ("s-july", "2026-07-15T12:00:00Z")):
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text(_line(name, "user", text="work", ts=ts) + "\n")
+        backfill_transcript(ledger, path, agent="claude-code")
+
+    june = ledger.get_session("s-june")["started_at"]
+    july = ledger.get_session("s-july")["started_at"]
+
+    assert july - june == pytest.approx(44 * 86400, abs=86400)
+
+
+def test_a_transcript_with_no_usable_clock_still_backfills(tmp_path, ledger):
+    """A transcript that carries no timestamp is not an error. It has no
+    better answer than "now", which is what it got before."""
+    import json
+
+    from nenapu.backfill import backfill_transcript
+    from nenapu.models import now
+
+    path = tmp_path / "s-blank.jsonl"
+    path.write_text(json.dumps({
+        "sessionId": "s-blank", "cwd": "/repo", "type": "user",
+        "message": {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+    }) + "\n")
+
+    backfill_transcript(ledger, path, agent="claude-code")
+
+    assert ledger.get_session("s-blank")["started_at"] == pytest.approx(now(), abs=60)
+
+
+def test_the_backfilled_session_ends_when_the_transcript_ends(tmp_path, ledger):
+    """`ended_at` is what "3 days ago" in the injected block is measured
+    from, and a backfilled session that never ended reads as one still
+    running."""
+    from nenapu.backfill import backfill_transcript
+
+    path = tmp_path / "s-span.jsonl"
+    path.write_text("\n".join([
+        _line("s-span", "user", text="start", ts="2026-07-01T09:00:00Z"),
+        _line("s-span", "assistant", text="end", ts="2026-07-01T11:30:00Z"),
+    ]) + "\n")
+
+    backfill_transcript(ledger, path, agent="claude-code")
+
+    assert ledger.get_session("s-span")["ended_at"] == pytest.approx(
+        _at("2026-07-01T11:30:00Z"), abs=1)

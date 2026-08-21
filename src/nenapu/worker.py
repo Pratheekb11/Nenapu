@@ -15,7 +15,14 @@ from pathlib import Path
 
 from .activity import ActivityLedger
 from .capture import capture_session, read_lines, session_meta_from
-from .ingest_queue import WorkerLock, claim_next, has_pending, mark_done, mark_failed
+from .ingest_queue import (
+    WorkerLock,
+    claim_next,
+    has_pending,
+    mark_done,
+    mark_failed,
+    release_stale_claims,
+)
 from .loops import LoopBook
 from .maintenance import run_maintenance_tick
 from .observer import observe_transcript
@@ -50,6 +57,11 @@ def drain(store: Store, *, lock_path: str | Path | None = None, limit: int = 20)
     lock = WorkerLock(lock_path or lock_for(store))
     if not lock.try_acquire():
         return 0  # another worker already has it; the jobs are not going anywhere
+
+    # Holding the lock means no other worker is draining, so any claim still
+    # open long past a model call belongs to a worker that died. Released here
+    # rather than on a timer: this is the one moment it is safe to decide.
+    release_stale_claims(store.conn)
 
     processed = 0
     touched: set[str] = set()

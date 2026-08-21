@@ -924,6 +924,7 @@ def replay_pending_sessions(
     store,
     *,
     since_days: float | None = None,
+    limit: int | None = None,
     transcripts_root: Path | str | None = None,
     db: str | None = None,
 ) -> list[str]:
@@ -934,6 +935,15 @@ def replay_pending_sessions(
     the lock, instead of fanning out eighteen concurrent model calls at one
     store. `enqueue_once` dedupes unfinished work and `Ledger.grade` is
     first-grade-wins, so replaying twice is a no-op rather than a second pass.
+
+    `limit` bounds what one invocation buys. Every queued session is an
+    83-second model call, and the backlog grows on its own as sessions run:
+    asking for the seven that had failed once queued fifty-two, which is an
+    hour of calls nobody asked for. The default stays unbounded, because
+    replaying the whole backlog is what the command is for; the bound is
+    there so it can be asked for in instalments. The most recent sessions
+    come first, since their transcripts describe how the store is being used
+    now.
 
     Returns the session ids queued. Spawning the worker is the caller's job:
     this function only decides what needs reading.
@@ -949,6 +959,8 @@ def replay_pending_sessions(
 
     queued: list[str] = []
     for session_id in _sessions_with_pending_recalls(store, since_days):
+        if limit is not None and len(queued) >= limit:
+            break
         path = on_disk.get(session_id)
         if path is None:
             continue
@@ -967,13 +979,16 @@ def grade(
     replay: bool = typer.Option(False, "--replay",
                                 help="Grade the backlog from transcripts on disk"),
     since: float = typer.Option(0, "--since", help="With --replay: only the last N days"),
+    limit: int = typer.Option(0, "--limit",
+                              help="With --replay: at most N sessions, newest first"),
     note: str = "",
     db: str = DB_OPT,
 ) -> None:
     """Grade every memory a task used, in one call."""
     store, _ = _stores(db)
     if replay:
-        sessions = replay_pending_sessions(store, since_days=since or None, db=db)
+        sessions = replay_pending_sessions(store, since_days=since or None,
+                                           limit=limit or None, db=db)
         if sessions:
             _spawn_worker(db)
         console.print(f"queued {len(sessions)} session(s) for grading")

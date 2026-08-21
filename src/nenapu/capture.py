@@ -156,6 +156,32 @@ def _timestamp(event: dict) -> float:
     return now()
 
 
+def session_span_from(lines: list[str]) -> tuple[float | None, float | None]:
+    """When the transcript says the session began and ended.
+
+    Read from the same clock `_timestamp` already reads for every file event,
+    and for the same reason: a backfill of months of history that stamps
+    ingestion time looks like one busy afternoon, and three things read
+    `sessions.started_at` believing it — the retrieval gate's coverage
+    measure, "Where you left off", and the rollups.
+
+    Returns `(None, None)` for a transcript that carries no clock at all,
+    which is not an error: it has no better answer than "now", and the caller
+    supplies it.
+    """
+    stamps = []
+    for line in lines:
+        event = _loads(line)
+        if event is None:
+            continue
+        raw = event.get("timestamp")
+        if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw):
+            stamps.append(_timestamp(event))
+    if not stamps:
+        return None, None
+    return min(stamps), max(stamps)
+
+
 def _resolve(path: str, cwd: str | None) -> str:
     if not cwd or path.startswith("/"):
         return path

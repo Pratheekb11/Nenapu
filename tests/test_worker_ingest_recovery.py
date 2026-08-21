@@ -277,3 +277,90 @@ def test_the_limit_still_bounds_one_drain(tmp_path, store, db):
 
     assert processed == 2
     assert [r["state"] for r in _queue_rows(db)].count("pending") == 2
+
+
+# ---------- 4. a claim outlives the worker that took it ----------
+#
+# Found in use rather than in review, replaying the backlog on 2026-08-22. A
+# worker was killed mid-job. Its row stayed `claimed` forever: `claim_next`
+# only ever looks at `pending`, and `enqueue_once` refuses to re-queue a path
+# that is already `pending` or `claimed`. So the job could not be retried by
+# any command, and the only way back was an UPDATE by hand.
+
+
+def test_a_claim_left_by_a_dead_worker_is_picked_up_again(tmp_path, store, db):
+    """The whole failure: nothing releases a claim, so one killed worker
+    strands a job permanently."""
+    from nenapu.models import now
+
+    transcript = _transcript(tmp_path)
+    enqueue(store.conn, path=str(transcript), agent="claude-code", session_id="s-1")
+    store.conn.execute(
+        "UPDATE ingest_queue SET state = 'claimed', claimed_at = ?", (now() - 4 * 3600,)
+    )
+    store.conn.commit()
+
+    _drain_capturing(store, tmp_path)
+
+    assert _queue_rows(db)[0]["state"] == "done"
+
+
+def test_a_claim_a_live_worker_is_holding_is_left_alone(tmp_path, store, db):
+    """The reason this is an age check and not a reset: a job claimed moments
+    ago belongs to a worker that is still inside its 83-second model call, and
+    stealing it buys two extractions of one transcript."""
+    from nenapu.ingest_queue import release_stale_claims
+    from nenapu.models import now
+
+    transcript = _transcript(tmp_path)
+    enqueue(store.conn, path=str(transcript), agent="claude-code", session_id="s-1")
+    store.conn.execute(
+        "UPDATE ingest_queue SET state = 'claimed', claimed_at = ?", (now() - 30,)
+    )
+    store.conn.commit()
+
+    assert release_stale_claims(store.conn) == 0
+    assert _queue_rows(db)[0]["state"] == "claimed"
+
+
+def test_releasing_a_stale_claim_keeps_what_the_job_carried(tmp_path, store, db):
+    """A released job is the same job. Losing its session id or its grade
+    source would make the retry land somewhere else than the original."""
+    from nenapu.ingest_queue import release_stale_claims
+    from nenapu.models import now
+
+    transcript = _transcript(tmp_path)
+    enqueue(store.conn, path=str(transcript), agent="claude-code", session_id="s-1",
+            grade_source="observer-replay")
+    store.conn.execute(
+        "UPDATE ingest_queue SET state = 'claimed', claimed_at = ?", (now() - 4 * 3600,)
+    )
+    store.conn.commit()
+
+    assert release_stale_claims(store.conn) == 1
+
+    row = _queue_rows(db)[0]
+    assert row["state"] == "pending"
+    assert row["session_id"] == "s-1"
+    assert row["grade_source"] == "observer-replay"
+
+
+def test_a_released_job_can_be_queued_again_by_enqueue_once(tmp_path, store, db):
+    """`enqueue_once` dedupes against pending and claimed, which is what made
+    a stranded claim unreachable to `grade --replay`."""
+    from nenapu.ingest_queue import enqueue_once, release_stale_claims
+    from nenapu.models import now
+
+    transcript = _transcript(tmp_path)
+    enqueue(store.conn, path=str(transcript), agent="claude-code", session_id="s-1")
+    store.conn.execute(
+        "UPDATE ingest_queue SET state = 'claimed', claimed_at = ?", (now() - 4 * 3600,)
+    )
+    store.conn.commit()
+
+    assert enqueue_once(store.conn, path=str(transcript), agent="claude-code") is None
+
+    release_stale_claims(store.conn)
+    _drain_capturing(store, tmp_path)
+
+    assert _queue_rows(db)[0]["state"] == "done"

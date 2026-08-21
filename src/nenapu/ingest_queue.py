@@ -62,6 +62,38 @@ def enqueue_once(
                        grade_source=grade_source)
 
 
+# How long a claim may go unfinished before a later worker may take it back.
+# An extraction is an 83-second model call and the backend retries, so an hour
+# is far past any honest run and far short of leaving a job stranded.
+STALE_CLAIM_SECONDS = 3600.0
+
+
+def release_stale_claims(
+    conn: sqlite3.Connection, older_than: float = STALE_CLAIM_SECONDS
+) -> int:
+    """Return jobs whose worker never came back to the queue. Returns how many.
+
+    Nothing else ever releases a claim: `claim_next` only looks at `pending`,
+    and `enqueue_once` refuses to re-queue a path that is `pending` or
+    `claimed`. So a worker killed mid-job — a machine asleep, a terminal
+    closed, a session limit reached — stranded its job permanently, and the
+    only way back was an UPDATE by hand.
+
+    An age check rather than a reset, because a job claimed moments ago
+    belongs to a worker still inside its model call, and stealing it buys two
+    extractions of one transcript. Everything the job carried is kept: it is
+    the same job, retried.
+    """
+    with transaction(conn):
+        cur = conn.execute(
+            "UPDATE ingest_queue SET state = ?, claimed_at = NULL"
+            " WHERE state = ? AND claimed_at IS NOT NULL AND claimed_at < ?",
+            (STATE_PENDING, STATE_CLAIMED, now() - older_than),
+        )
+        commit(conn)
+        return cur.rowcount
+
+
 def has_pending(conn: sqlite3.Connection) -> bool:
     """Is there work waiting? A look, not a claim.
 

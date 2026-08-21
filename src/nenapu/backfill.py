@@ -18,7 +18,12 @@ import os
 from pathlib import Path
 
 from .activity import ActivityLedger
-from .capture import file_events_from, read_lines, session_meta_from
+from .capture import (
+    file_events_from,
+    read_lines,
+    session_meta_from,
+    session_span_from,
+)
 from .store import project_scope
 
 
@@ -41,17 +46,28 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
         return None
     session_id = meta["session_id"]
 
+    # The transcript's own clock, not this afternoon's. A row stamped at
+    # ingestion time claims a session from six weeks ago happened during the
+    # hook era, which is read as a live session that was given no memory.
+    started_at, ended_at = session_span_from(lines)
+
     row_id = ledger.start_session(
         agent=agent,
         project_scope=project_scope(meta["cwd"]) if meta["cwd"] else "global",
         cwd=meta["cwd"],
         git_branch=meta["git_branch"],
+        started_at=started_at,
         external_id=session_id,
     )
     for event in file_events_from(lines):
         ledger.record_file_event(
             row_id, path=event["path"], op=event["op"], tool=event["tool"], at=event["at"],
         )
+    # A backfilled session is over: it is history being read back. Leaving
+    # `ended_at` null reads as one still running, and "3 days ago" in the
+    # injected block is measured from it.
+    if ended_at is not None:
+        ledger.end_session(row_id, ended_at=ended_at)
     return row_id
 
 

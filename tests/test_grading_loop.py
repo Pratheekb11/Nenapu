@@ -691,3 +691,60 @@ def test_the_replay_run_is_a_registered_command_path(tmp_path):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ==========================================================================
+# G6, second pass · bounding what one replay costs
+#
+# Found in use on 2026-08-22. `--replay` queues every session that still has
+# pending recalls, and by the second run dozens had accumulated: asking for
+# the seven that had failed queued fifty-two, which is over an hour of model
+# calls nobody asked for. `--since` bounds by date, which is the wrong axis
+# when the sessions you want are the ones that failed. A ceiling on how much
+# work one invocation buys is the guard that was missing.
+# ==========================================================================
+
+
+def test_replay_queues_no_more_sessions_than_it_was_asked_for(store, tmp_path):
+    from nenapu.cli import replay_pending_sessions
+
+    for name in ("s-a", "s-b", "s-c"):
+        _pending_recall(store, name, session_id=name)
+    root = _projects_root(tmp_path, ["s-a", "s-b", "s-c"])
+
+    queued = replay_pending_sessions(store, transcripts_root=root, limit=2)
+
+    assert len(queued) == 2
+    assert len(_queued(store)) == 2
+
+
+def test_the_most_recent_sessions_are_the_ones_a_bounded_replay_takes(store, tmp_path):
+    """Which two matters. The recent sessions are the ones whose transcripts
+    still describe how the store is being used now."""
+    from nenapu.cli import replay_pending_sessions
+
+    _pending_recall(store, "old", session_id="s-old", days_ago=30)
+    _pending_recall(store, "new", session_id="s-new", days_ago=1)
+    root = _projects_root(tmp_path, ["s-old", "s-new"])
+
+    assert replay_pending_sessions(store, transcripts_root=root, limit=1) == ["s-new"]
+
+
+def test_an_unbounded_replay_is_still_unbounded(store, tmp_path):
+    """The default cannot change: a replay of the whole backlog is the thing
+    the command exists for."""
+    from nenapu.cli import replay_pending_sessions
+
+    for name in ("s-a", "s-b", "s-c"):
+        _pending_recall(store, name, session_id=name)
+    root = _projects_root(tmp_path, ["s-a", "s-b", "s-c"])
+
+    assert len(replay_pending_sessions(store, transcripts_root=root)) == 3
+
+
+def test_the_limit_flag_is_registered_on_grade():
+    import nenapu.cli as cli
+
+    command = next(c for c in cli.app.registered_commands if c.name == "grade")
+
+    assert "limit" in command.callback.__code__.co_varnames
