@@ -240,7 +240,6 @@ def test_a_filesystem_that_cannot_chmod_still_opens(tmp_path, monkeypatch):
 # named place so a reader can check them against the plan.
 # ==========================================================================
 
-r1 = pytest.mark.xfail(strict=True, reason="R1 not implemented yet: remove when it lands")
 e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
 
 
@@ -251,7 +250,6 @@ def _texts(hits):
 # ---------- R1 · what the query is allowed to match ----------
 
 
-@r1
 def test_a_multi_term_query_does_not_match_on_one_word(store):
     """`" OR ".join(terms)` is why a session about deploys retrieves a fact
     about a coffee machine: they share the word "cache"."""
@@ -263,7 +261,6 @@ def test_a_multi_term_query_does_not_match_on_one_word(store):
     assert "the coffee machine has a cache of beans" not in _texts(hits)
 
 
-@r1
 def test_a_term_too_common_to_discriminate_does_not_drive_the_match(store):
     """A word that appears in most of the store narrows nothing. Matching on
     it is how twelve slots fill with everything."""
@@ -276,7 +273,6 @@ def test_a_term_too_common_to_discriminate_does_not_drive_the_match(store):
     assert _texts(hits) == ["the badger enclosure needs a new latch"]
 
 
-@r1
 def test_a_phrase_query_matches_the_phrase(store):
     """Two words next to each other are a different claim from the same two
     words in one paragraph."""
@@ -288,7 +284,6 @@ def test_a_phrase_query_matches_the_phrase(store):
     assert _texts(hits) == ["the connection pool is capped at 20"]
 
 
-@r1
 def test_a_key_match_outranks_an_equal_prose_match(store):
     """197 facts carry dotted keys. A query that matches a fact's key is a
     much stronger signal than one matching a word in its prose, and bm25
@@ -303,7 +298,6 @@ def test_a_key_match_outranks_an_equal_prose_match(store):
     assert hits[0][2]["key_match"] is True
 
 
-@r1
 def test_a_tag_match_is_weighted_like_a_key_match(store):
     """`tags_csv` is in the FTS table and has never been weighted either. A
     fact carrying the tag is a stronger answer than one that happens to say
@@ -319,7 +313,6 @@ def test_a_tag_match_is_weighted_like_a_key_match(store):
     assert hits[0][2]["tag_match"] is True
 
 
-@r1
 def test_a_believed_fact_outside_the_lexical_pool_can_still_surface(store):
     """The structural fault: the pool is `ORDER BY rank LIMIT limit*5`, so
     confidence is a re-ranker over a lexical pool and never a retriever. A
@@ -339,7 +332,6 @@ def test_a_believed_fact_outside_the_lexical_pool_can_still_surface(store):
     assert believed.id in [fact.id for fact, _s, _w in hits]
 
 
-@r1
 def test_an_unmatched_query_does_not_look_like_a_match(store):
     """The silent failure at the fallback: an unmatched query returns
     arbitrary recent facts at a flat 0.3, presented as hits. In the MCP path
@@ -353,7 +345,6 @@ def test_an_unmatched_query_does_not_look_like_a_match(store):
     assert hits == [] or all(why.get("fallback") for _f, _s, why in hits)
 
 
-@r1
 def test_the_fallback_is_labelled_where_a_caller_can_see_it(store):
     """Either answer is defensible — return nothing, or return the fallback
     marked as such. What is not defensible is a recency guess wearing the
@@ -367,7 +358,6 @@ def test_the_fallback_is_labelled_where_a_caller_can_see_it(store):
         assert why["lexical"] == 0.0
 
 
-@r1
 def test_an_empty_query_is_not_a_search(store):
     store.write(Fact(text="the deploy script lives in tools/ship.sh"))
 

@@ -21,7 +21,7 @@ import re
 import sqlite3
 import subprocess
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -574,6 +574,93 @@ class Store:
 
     # ---------- recall ----------
 
+    def _document_frequency(self, term: str) -> int:
+        """How many facts contain `term`. A term in most of the store narrows
+        nothing, and matching on it is how twelve slots fill with everything."""
+        try:
+            row = self.conn.execute(
+                "SELECT COUNT(*) c FROM facts_fts WHERE facts_fts MATCH ?", (f'"{term}"',)
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return row["c"] if row else 0
+
+    def _plan_query(self, raw: str) -> QueryPlan:
+        """Turn user text into required and optional terms.
+
+        Required terms are the rarest ones that actually occur in the store: a
+        term nothing contains cannot be required without emptying the result,
+        and a term almost everything contains cannot discriminate.
+        """
+        phrases, terms = _parse_query(raw)
+        if not phrases and not terms:
+            return QueryPlan()
+        if phrases:
+            # A phrase is already a strong constraint; the loose terms beside it
+            # stay optional so they refine the ranking without narrowing it.
+            present = [t for t in terms if self._document_frequency(t) > 0]
+            return QueryPlan(phrases=tuple(phrases), optional=tuple(present), is_search=True)
+
+        frequency = {t: self._document_frequency(t) for t in terms}
+        present = [t for t in terms if frequency[t] > 0]
+        total = self.conn.execute("SELECT COUNT(*) c FROM facts").fetchone()["c"]
+        discriminating = [t for t in present if not _too_common(frequency[t], total)]
+        if not discriminating:
+            # Every term is common: the query is still what the user asked for.
+            discriminating = present
+        required = sorted(discriminating, key=lambda t: frequency[t])[:MAX_REQUIRED_TERMS]
+        optional = [t for t in present if t not in required]
+        return QueryPlan(required=tuple(required), optional=tuple(optional), is_search=True)
+
+    def _candidate_pool(
+        self,
+        plan: QueryPlan,
+        *,
+        statuses: Sequence[str],
+        scope: str | Sequence[str] | None,
+        pool: int,
+    ) -> list[_Candidate]:
+        """Lexical hits unioned with the best-believed hits for the same query.
+
+        R1: the pool used to be `ORDER BY rank LIMIT limit*5`, which made
+        confidence a re-ranker over a lexical pool and never a retriever. A
+        strongly believed fact ranked 51st lexically could not surface however
+        well it answered the query. Both pools match the same expression, so
+        confidence widens what is considered without inventing hits.
+        """
+        expression = plan.match_expression()
+        if not expression:
+            return []
+
+        sql = (
+            f"SELECT f.*, bm25(facts_fts, {_BM25_TEXT_WEIGHT}, {_BM25_KEY_WEIGHT},"
+            f" {_BM25_TAG_WEIGHT}) AS rank FROM facts_fts"
+            " JOIN facts f ON f.id = facts_fts.rowid"
+            " WHERE facts_fts MATCH ? AND f.status IN ("
+            + ",".join("?" * len(statuses)) + ")"
+        )
+        args: list = [expression, *statuses]
+        if scope:
+            scopes = [scope] if isinstance(scope, str) else list(scope)
+            sql += f" AND f.scope IN ({','.join('?' * len(scopes))})"
+            args.extend(scopes)
+
+        orderings = (
+            "rank",
+            "f.confidence DESC, COALESCE(f.last_verified_at, f.created_at) DESC",
+        )
+        found: dict[int, _Candidate] = {}
+        for order in orderings:
+            try:
+                rows = self.conn.execute(f"{sql} ORDER BY {order} LIMIT ?", [*args, pool])
+                for row in rows:
+                    if row["id"] in found:
+                        continue
+                    found[row["id"]] = _candidate_from(row_to_fact(row), row["rank"], plan)
+            except sqlite3.OperationalError:
+                return []
+        return list(found.values())
+
     def search(
         self,
         query: str,
@@ -592,38 +679,30 @@ class Store:
         memory surfaced — and why a stale one did not.
         """
         statuses = ["active", "suspect", "disputed"] if include_disputed else ["active"]
-        placeholders = ",".join("?" * len(statuses))
 
-        candidates: list[tuple[Fact, float]] = []
-        fts_query = _fts_query(query)
-        if fts_query:
-            sql = (
-                "SELECT f.*, bm25(facts_fts) AS rank FROM facts_fts"
-                " JOIN facts f ON f.id = facts_fts.rowid"
-                " WHERE facts_fts MATCH ? AND f.status IN (" + placeholders + ")"
-            )
-            args: list = [fts_query, *statuses]
-            if scope:
-                scopes = [scope] if isinstance(scope, str) else list(scope)
-                sql += f" AND f.scope IN ({','.join('?' * len(scopes))})"
-                args.extend(scopes)
-            sql += " ORDER BY rank LIMIT ?"
-            args.append(limit * 5)
-            try:
-                for row in self.conn.execute(sql, args):
-                    # bm25 is negative-better; flip and squash into 0..1.
-                    lex = 1.0 / (1.0 + math.exp(row["rank"]))
-                    candidates.append((row_to_fact(row), lex))
-            except sqlite3.OperationalError:
-                candidates = []
+        # R1: the query is planned, not OR-joined. `plan.match_expression()`
+        # requires the discriminating terms and leaves the rest as bm25 signal,
+        # so a twelve-term query no longer matches everything sharing one word.
+        plan = self._plan_query(query)
+        candidates = self._candidate_pool(
+            plan, statuses=statuses, scope=scope, pool=limit * 5
+        )
 
-        if not candidates:  # empty query, or FTS found nothing: fall back to recency
-            for f in self.list_facts(scope=scope, status=statuses, limit=limit * 5):
-                candidates.append((f, 0.3))
+        # R1: recency is only an answer to "no query at all". An unmatched query
+        # used to return arbitrary recent facts at a flat 0.3 *presented as
+        # hits*, which the MCP path then logged as recalls with a query
+        # attached, poisoning the population the gate reads to measure ranking.
+        fallback = not plan.is_search
+        if fallback:
+            candidates = [
+                _Candidate(fact=f, lexical=0.0, key_match=False, tag_match=False)
+                for f in self.list_facts(scope=scope, status=statuses, limit=limit * 5)
+            ]
 
         at = now()
         scored: list[tuple[Fact, float, dict]] = []
-        for fact, lex in candidates:
+        for candidate in candidates:
+            fact, lex = candidate.fact, candidate.lexical
             conf = effective_confidence(fact, at)
             usage = min(1.0, math.log1p(fact.use_count) / math.log(11))  # saturates ~10 uses
             score = 0.5 * lex + 0.4 * conf + 0.1 * usage
@@ -637,6 +716,9 @@ class Store:
                         "lexical": round(lex, 3),
                         "confidence": round(conf, 3),
                         "usage": round(usage, 3),
+                        "key_match": candidate.key_match,
+                        "tag_match": candidate.tag_match,
+                        "fallback": fallback,
                         "age_days": round((at - (fact.last_verified_at or fact.created_at)) / DAY, 1),
                         "verify_status": fact.verify_status,
                         "track_record": f"{fact.good_recalls}/{fact.good_recalls + fact.bad_recalls}",
@@ -697,3 +779,128 @@ def _fts_query(raw: str) -> str:
     if not terms:
         return ""
     return " OR ".join(f'"{t}"' for t in terms)
+
+
+# ---------- R1 · query planning and candidate generation ----------
+
+_PHRASE = re.compile(r'"([^"]*)"')
+
+# Words that carry no retrieval signal: they appear in almost any sentence, so
+# a fact matching one of them has told you nothing about the query.
+STOPWORDS = frozenset("""
+a an the and or but if then else than that this these those of in on at to for
+from with without by as is are was were be been being it its do does did done
+how what when where which who why can could should would will have has had not
+no yes i me my we our you your they them their he she his her about into over
+under out up down again more most some any all there here also very just
+""".split())
+
+# A term in more than half the store cannot discriminate between facts in it.
+COMMON_TERM_FRACTION = 0.5
+# ... but only once there is a store to speak of: on a handful of facts every
+# term looks common, and dropping it would leave the query with nothing.
+COMMON_TERM_MIN_FACTS = 10
+# Two required terms is the smallest constraint that rejects a one-word
+# coincidence while still answering a query whose other terms are noise.
+MAX_REQUIRED_TERMS = 2
+# `relevant_memory` can feed forty salient terms from a whole session; the
+# planner must not turn one query into forty.
+MAX_QUERY_TERMS = 24
+
+# bm25 column weights, in the order the FTS table declares them (text, key,
+# tags_csv). A query matching a fact's key or tag is a much stronger signal
+# than one matching a word in its prose, and bm25 treated all three alike.
+_BM25_TEXT_WEIGHT = 1.0
+_BM25_KEY_WEIGHT = 5.0
+_BM25_TAG_WEIGHT = 4.0
+
+# Applied in bm25 rank space (negative is better) rather than to the squashed
+# score, which saturates near 1.0 and would swallow the difference.
+KEY_MATCH_BOOST = 2.0
+TAG_MATCH_BOOST = 1.5
+
+
+@dataclass(frozen=True)
+class QueryPlan:
+    """What a query is allowed to match.
+
+    `is_search` distinguishes "the user asked for nothing" from "the user asked
+    for something the store does not hold". The first may answer with recent
+    facts; the second must answer with nothing.
+    """
+
+    phrases: tuple[str, ...] = ()
+    required: tuple[str, ...] = ()
+    optional: tuple[str, ...] = ()
+    is_search: bool = False
+
+    def match_expression(self) -> str:
+        """FTS5 MATCH text: required terms conjoined, optional terms kept in an
+        OR group so bm25 still scores them without narrowing the result."""
+        must = [f'"{p}"' for p in self.phrases] + [f'"{t}"' for t in self.required]
+        if not must:
+            return ""
+        expression = " AND ".join(must)
+        if self.optional:
+            everything = must + [f'"{t}"' for t in self.optional]
+            expression += " AND (" + " OR ".join(everything) + ")"
+        return expression
+
+    def words(self) -> set[str]:
+        """Every word the query mentions, for matching against key and tags."""
+        found = {t.lower() for t in self.required + self.optional}
+        for phrase in self.phrases:
+            found.update(w.lower() for w in _FTS_SAFE.sub(" ", phrase).split())
+        return found
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    fact: Fact
+    lexical: float
+    key_match: bool
+    tag_match: bool
+
+
+def _parse_query(raw: str) -> tuple[list[str], list[str]]:
+    """Split user text into quoted phrases and loose terms.
+
+    Two words next to each other are a different claim from the same two words
+    in one paragraph, so quotes survive as phrases instead of being scrubbed.
+    """
+    text = raw or ""
+    phrases = [p.strip() for p in _PHRASE.findall(text) if p.strip()]
+    cleaned = _FTS_SAFE.sub(" ", _PHRASE.sub(" ", text))
+    terms: list[str] = []
+    for word in cleaned.split():
+        lowered = word.lower()
+        if len(lowered) < 2 or lowered in STOPWORDS or lowered in terms:
+            continue
+        terms.append(lowered)
+    return phrases, terms[:MAX_QUERY_TERMS]
+
+
+def _too_common(frequency: int, total: int) -> bool:
+    return total >= COMMON_TERM_MIN_FACTS and frequency > total * COMMON_TERM_FRACTION
+
+
+def _field_words(text: str | None) -> set[str]:
+    return {w.lower() for w in _FTS_SAFE.sub(" ", text or "").split()}
+
+
+def _candidate_from(fact: Fact, rank: float, plan: QueryPlan) -> _Candidate:
+    """Score one row, boosting matches that landed in `key` or `tags_csv`."""
+    asked = plan.words()
+    key_match = bool(asked & _field_words(fact.key))
+    tag_match = bool(asked & _field_words(",".join(fact.tags or [])))
+    if key_match:
+        rank -= KEY_MATCH_BOOST
+    if tag_match:
+        rank -= TAG_MATCH_BOOST
+    # bm25 is negative-better; flip and squash into 0..1.
+    return _Candidate(
+        fact=fact,
+        lexical=1.0 / (1.0 + math.exp(rank)),
+        key_match=key_match,
+        tag_match=tag_match,
+    )
