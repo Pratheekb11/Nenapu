@@ -22,6 +22,23 @@ from .observer import observe_transcript
 from .store import Store, project_scope
 
 
+DEFAULT_LOCK_PATH = "~/.nenapu/worker.lock"
+
+
+def lock_for(store: Store) -> Path:
+    """The worker lock that belongs to this store.
+
+    Beside the store file rather than at one fixed path, so two stores on one
+    machine do not block each other, and so the lock is findable from `--db`
+    alone — the Stop hook passes the worker nothing else.
+    """
+    row = store.conn.execute("PRAGMA database_list").fetchone()
+    path = row[2] if row else ""
+    if not path:  # an in-memory store has no directory to sit beside
+        return Path(DEFAULT_LOCK_PATH).expanduser()
+    return Path(path).parent / "worker.lock"
+
+
 def drain(store: Store, *, lock_path: str | Path | None = None, limit: int = 20) -> int:
     """Process queued transcripts until the queue is empty. Returns the count.
 
@@ -29,7 +46,7 @@ def drain(store: Store, *, lock_path: str | Path | None = None, limit: int = 20)
     transcript, or one model backend outage, must not stop everything behind
     it from ever being learned from.
     """
-    lock = WorkerLock(lock_path or Path("~/.nenapu/worker.lock").expanduser())
+    lock = WorkerLock(lock_path or lock_for(store))
     if not lock.try_acquire():
         return 0  # another worker already has it; the jobs are not going anywhere
 

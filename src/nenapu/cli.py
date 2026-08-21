@@ -1149,14 +1149,41 @@ def _open_observe_log(path: Path):
     return os.fdopen(fd, "a")
 
 
-def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
-    """Spawn a fully detached `nenapu learn` and do not wait for it.
+def _queue_and_detach(path: str, session_id: str | None, db: str | None) -> None:
+    """Queue the transcript and hand it to a detached worker.
+
+    The hook's whole job: one `ingest_queue` row, one background `nenapu
+    drain`, and return. It deliberately does no extraction and no capture of
+    its own — both belong to the worker, so that everything downstream of the
+    queue (`run_maintenance_tick`, loop closure, the ledger) also runs on a
+    machine that only has hooks and never starts the watcher.
+
+    Serialising through the queue is what ends the fan-out: two sessions
+    ending together now queue two jobs that one worker reads in turn, rather
+    than starting two concurrent 83-second model calls against one store.
+    """
+    from .ingest_queue import enqueue_once
+
+    try:
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        enqueue_once(store.conn, path=path, agent="claude-code", session_id=session_id)
+    except Exception:  # noqa: BLE001 — an unwritable store must not fail the session
+        return
+    _spawn_worker(db)
+
+
+def _spawn_worker(db: str | None) -> None:
+    """Start a detached `nenapu drain` and do not wait for it.
 
     `start_new_session` puts the child in its own process group, so the
     harness tearing down the session's process tree does not take the
     extraction with it. Output goes to a log rather than to the pipe the hook
     is being read on, because a hook that prints after it has returned
     corrupts whatever is reading it.
+
+    A second worker started while one is draining finds `WorkerLock` taken and
+    returns, leaving the jobs where they are, so spawning unconditionally is
+    cheap rather than duplicated work.
     """
     import subprocess
 
@@ -1174,12 +1201,12 @@ def _detach_observe(path: str, session_id: str | None, db: str | None) -> None:
     import shutil
 
     entry = shutil.which("nenapu")
-    argv = ([entry] if entry else [sys.executable, "-m", "nenapu.cli"]) + ["observe", path]
+    argv = ([entry] if entry else [sys.executable, "-m", "nenapu.cli"]) + ["drain"]
     if db:
         argv += ["--db", db]
+    # The worker calls the model, and when the backend is an agent CLI that CLI
+    # fires its own Stop hook. The marker keeps that chain one level deep.
     env = dict(os.environ, NENAPU_NO_BANNER="1", NENAPU_OBSERVING="1")
-    if session_id:
-        env["NENAPU_SESSION_ID"] = session_id
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                          start_new_session=True, env=env)
@@ -1233,8 +1260,17 @@ def learn(
             raise typer.Exit(0)  # a hook with no transcript is not an error
         raise typer.BadParameter("no transcript path (pass one, or --stdin from a hook)")
 
-    # Before any branch below: the model half can be skipped, detached or
-    # unavailable, and none of that changes what the session did to the files.
+    if detach:
+        # Extraction is a model call over an entire session — 83s against real
+        # transcripts, and hooks are killed at their timeout. The hook queues
+        # the work and a detached worker does all of it: capture included, so
+        # the transcript is read once, by one process, holding one lock.
+        _queue_and_detach(path, session_id, db)
+        raise typer.Exit(0)
+
+    # Below here the work is inline, so the ledger half runs first: the model
+    # half can be skipped or unavailable, and none of that changes what the
+    # session did to the files.
     _capture_activity(path, session_id, db)
 
     if no_infer:
@@ -1253,15 +1289,6 @@ def learn(
                 "[dim]nothing stored — set NENAPU_STORE_MESSAGES=1 to enable[/]"
             )
         return
-
-    if detach:
-        # Extraction is a model call over an entire session — 83s against real
-        # transcripts. Hooks are killed at their timeout, so doing the work
-        # inline means the work never finishes. Re-exec ourselves detached,
-        # with the payload already resolved into arguments so the child needs
-        # no stdin, and return before anything is waiting on us.
-        _detach_observe(path, session_id, db)
-        raise typer.Exit(0)
 
     try:
         # The detached child has no terminal to greet; opening plainly keeps
@@ -1491,6 +1518,24 @@ def _install_watch_unit(console_out, *, yes: bool = False) -> None:
     path.write_text(WATCH_UNIT % entry)
     console_out.print(f"  [green]✓[/] watcher unit written to {path}")
     console_out.print("  [dim]systemctl --user enable --now nenapu-watch[/]")
+
+
+@app.command(rich_help_panel=UPKEEP)
+def drain(
+    limit: int = typer.Option(20, "--limit", help="Most jobs to process in one pass"),
+    db: str = DB_OPT,
+) -> None:
+    """Extract from whatever the queue is holding, one worker at a time.
+
+    What the Stop hook spawns, and what `watch` calls after a tick. A second
+    worker finds the lock taken and returns, which is what keeps sessions
+    ending together from becoming concurrent model calls against one store.
+    """
+    from .worker import drain as drain_queue
+
+    store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+    done = drain_queue(store, limit=limit)
+    console.print(f"extracted {done} session(s)")
 
 
 @app.command(rich_help_panel=UPKEEP)

@@ -37,6 +37,28 @@ def enqueue(
         return cur.lastrowid
 
 
+def enqueue_once(
+    conn: sqlite3.Connection, *, path: str, agent: str, session_id: str | None = None,
+) -> int | None:
+    """Enqueue unless this transcript is already waiting. Returns the new id.
+
+    Two hooks for one session — a retry, or the watcher and the hook reaching
+    the same file — must not buy two 83-second extractions of identical
+    content. Dedupe covers *unfinished* work only: a session that was resumed
+    and appended to is new material, and a finished job is no reason to refuse
+    to read it again. The check and the insert share one transaction, so two
+    hooks firing together cannot both find nothing and both insert.
+    """
+    with transaction(conn):
+        waiting = conn.execute(
+            "SELECT id FROM ingest_queue WHERE path = ? AND state IN (?, ?) LIMIT 1",
+            (path, STATE_PENDING, STATE_CLAIMED),
+        ).fetchone()
+        if waiting is not None:
+            return None
+        return enqueue(conn, path=path, agent=agent, session_id=session_id)
+
+
 def claim_next(conn: sqlite3.Connection) -> dict | None:
     """Atomically claim the oldest pending job, so two workers racing on the
     same store cannot both come away with it."""
