@@ -1147,7 +1147,7 @@ def retrieval(
     console.print(f"[bold]{evidence['verdict']}[/] — {VERDICT_MEANING[evidence['verdict']]}")
 
 
-@app.command(rich_help_panel=ACTIVITY)
+@app.command(rich_help_panel=NETWORK)
 def entities(
     rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild from the activity ledger"),
     scope: str = typer.Option("", help="Limit the rebuild to one project scope"),
