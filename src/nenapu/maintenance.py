@@ -28,6 +28,7 @@ from .db import commit
 from .distill import dedupe
 from .loops import LoopBook
 from .models import now
+from .rollup import rollup_activity
 from .store import Store
 from .verify import verify_scope as run_check
 
@@ -35,6 +36,11 @@ from .verify import verify_scope as run_check
 # command) run per touched scope on their own longer cadence instead.
 AUDIT_CADENCE_SECONDS = 7 * 86400.0
 CHECK_CADENCE_SECONDS = 1 * 86400.0
+# The fold is a full scan of everything older than fourteen days, and the
+# worker ticks once per ingested session, so it cannot ride every tick. A week
+# is too slow the other way: a month of daily use between folds is the
+# readability problem the downsampling exists to prevent.
+ROLLUP_CADENCE_SECONDS = 1 * 86400.0
 
 
 def _last_run(store: Store, key: str) -> float | None:
@@ -61,7 +67,8 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     """Run whatever upkeep is due.
 
     `expire_pending` runs every tick — nearly free, and otherwise never runs
-    at all. `dedupe` runs once per scope the worker just wrote to, since
+    at all. `rollup_activity` folds the ledger by age on its own daily
+    cadence. `dedupe` runs once per scope the worker just wrote to, since
     duplicates can only appear where something was just ingested. `audit`
     and `check` cost real money or time, so they run per touched scope on
     their own longer cadence, tracked in `meta`.
@@ -73,6 +80,20 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     # because evidence for a loop can land in a session the worker did not
     # just ingest.
     LoopBook(store.conn).close_satisfied(ActivityLedger(store.conn))
+
+    # Ageing the work log, on its own cadence. Unscoped for the same reason
+    # loop closure is: a worker that just drained a session in one project
+    # still has to fold another project's year-old sessions. The mark is
+    # written only after the fold returns, so a run that failed is retried on
+    # the next tick rather than silenced for a day, and the failure itself
+    # stays inside the tick — after task 19 this runs inside a Stop hook.
+    if _due(store, "rollup", ROLLUP_CADENCE_SECONDS):
+        try:
+            rollup_activity(ActivityLedger(store.conn))
+        except Exception:  # noqa: BLE001 — upkeep must never break a session
+            pass
+        else:
+            _mark_run(store, "rollup")
 
     for scope in touched_scopes:
         dedupe(store, scope=scope)
