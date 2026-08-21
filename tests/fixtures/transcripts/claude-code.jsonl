@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"probe-claude-code","cwd":"/repo","message":{"role":"user","content":[{"type":"text","text":"use pnpm not npm in this repo"}]}}
+{"type":"assistant","sessionId":"probe-claude-code","cwd":"/repo","message":{"role":"assistant","content":[{"type":"text","text":"understood, pnpm from here"},{"type":"tool_use","name":"Edit","input":{"file_path":"package.json"}}]}}

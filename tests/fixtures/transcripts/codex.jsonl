@@ -1,0 +1,10 @@
+{"timestamp":"2026-07-25T10:37:09.285Z","type":"session_meta","payload":{"session_id":"probe-codex","id":"probe-codex","timestamp":"2026-07-25T10:37:08.743Z","cwd":"/repo","originator":"codex_cli","cli_version":"0.146.0","source":"cli","thread_source":"user","model_provider":"openai"}}
+{"timestamp":"2026-07-25T10:37:09.301Z","type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/repo","workspace_roots":["/repo"],"approval_policy":"never","sandbox_policy":{"mode":"danger-full-access"}}}
+{"timestamp":"2026-07-25T10:37:10.114Z","type":"response_item","payload":{"type":"message","id":"msg-1","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nFilesystem sandboxing defines which files can be read or written."}]}}
+{"timestamp":"2026-07-25T10:37:10.180Z","type":"event_msg","payload":{"type":"user_message","client_id":"probe-client","message":"use uv, not pip, in this repo"}}
+{"timestamp":"2026-07-25T10:37:10.190Z","type":"response_item","payload":{"type":"message","id":"msg-2","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of plugins that are available but not installed."}]}}
+{"timestamp":"2026-07-25T10:37:12.402Z","type":"response_item","payload":{"type":"reasoning","id":"rs-1","summary":[],"encrypted_content":"..."}}
+{"timestamp":"2026-07-25T10:37:14.771Z","type":"event_msg","payload":{"type":"agent_message","message":"understood, uv from here"}}
+{"timestamp":"2026-07-25T10:37:14.780Z","type":"response_item","payload":{"type":"message","id":"msg-3","role":"assistant","content":[{"type":"output_text","text":"understood, uv from here"}]}}
+{"timestamp":"2026-07-25T10:37:15.002Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":16903,"output_tokens":169}}}}
+{"timestamp":"2026-07-25T10:37:15.310Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"understood, uv from here"}}

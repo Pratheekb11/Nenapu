@@ -1612,11 +1612,38 @@ def drain(
     console.print(f"extracted {done} session(s)")
 
 
+def _probe_adapters() -> None:
+    """Print what every registered glob matches on this machine.
+
+    An adapter may only be registered for an agent someone has real
+    transcripts from, so this is the first thing to run on a machine that has
+    Codex, Gemini, OpenCode or Cursor installed: it says whether the glob you
+    are about to write down matches anything there. It reads the filesystem
+    and nothing else — no store is opened and nothing is queued, because a
+    probe that ingested would spend an extraction per matched file answering
+    the question.
+    """
+    from .watch import probe
+
+    table = Table()
+    table.add_column("agent", style="cyan")
+    table.add_column("glob")
+    table.add_column("matches here", justify="right")
+    table.add_column("newest", style="dim")
+    for found in probe():
+        newest = Path(found["newest"]).name if found["newest"] else "-"
+        table.add_row(found["agent"], found["glob"], str(found["matched"]), newest)
+    console.print(table)
+    console.print("[dim]nothing was queued: a probe reads the filesystem only[/]")
+
+
 @app.command(rich_help_panel=UPKEEP)
 def watch(
     once: bool = typer.Option(False, "--once", help="Run a single pass and exit"),
     batch: bool = typer.Option(False, "--batch",
                                help="Enqueue the whole backlog rather than one session"),
+    probe_only: bool = typer.Option(False, "--probe",
+                                    help="Report what each glob matches here, and stop"),
     interval: float = typer.Option(60.0, help="Seconds between passes"),
     db: str = DB_OPT,
 ) -> None:
@@ -1625,6 +1652,10 @@ def watch(
 
     from .watch import tick
     from .worker import drain
+
+    if probe_only:
+        _probe_adapters()
+        return
 
     store, _ = open_store(db or os.environ.get("NENAPU_DB"))
     while True:

@@ -33,6 +33,7 @@ import re
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 from .db import commit, transaction
 from .llm import Backend, LLMUnavailable, detect_backend, structured
@@ -232,7 +233,11 @@ def _turns_from(lines: list[str]) -> list[str]:
     return [f"{role}: {text}" for role, text in _role_text_pairs(lines)]
 
 
-def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str:
+def _read_transcript(
+    path: Path,
+    max_chars: int = MAX_CONVERSATION_CHARS,
+    parse: Callable[[list[str]], list[str]] | None = None,
+) -> str:
     """Flatten a Claude Code JSONL transcript into readable turns.
 
     Two things make this harder than it looks on real data:
@@ -246,7 +251,13 @@ def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str
 
     So the tail grows until there is enough real conversation to be worth
     reading, or the file runs out.
+
+    `parse` is the agent's own reader. Every agent writes a different file,
+    and reading a Codex rollout with Claude Code's parser harvests nothing at
+    all — the watcher would discover the session, queue it, and extract an
+    empty conversation while reporting success.
     """
+    parse = parse or _turns_from
     try:
         size = path.stat().st_size
     except OSError:
@@ -266,7 +277,7 @@ def _read_transcript(path: Path, max_chars: int = MAX_CONVERSATION_CHARS) -> str
         except OSError:
             return ""
 
-        turns = _turns_from(lines)
+        turns = parse(lines)
         harvest = sum(len(t) for t in turns)
         if harvest >= max_chars or window >= size or window >= MAX_TAIL_BYTES:
             break
@@ -421,6 +432,7 @@ def observe_transcript(
     cwd: str | None = None,
     backend: Backend | None = None,
     apply: bool = True,
+    parse: Callable[[list[str]], list[str]] | None = None,
 ) -> list[Fact]:
     """Extract what a finished session taught, and store it.
 
@@ -430,7 +442,7 @@ def observe_transcript(
     ids it may point at are only the ones it was shown, and the store's own
     rules still decide what happens to the row.
     """
-    conversation = _read_transcript(Path(transcript))
+    conversation = _read_transcript(Path(transcript), parse=parse)
     if len(conversation) < 200:
         return []  # nothing substantive happened
 

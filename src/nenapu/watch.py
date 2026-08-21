@@ -57,16 +57,75 @@ class TranscriptFormat:
     parse: Callable[[list[str]], list[str]]
 
 
-# Claude Code only, deliberately. Its format is already parsed by the observer
-# and its transcripts are on this machine; Codex, Gemini, OpenCode and Cursor
-# belong here only once someone has probed a real file each writes.
+def _codex_turns_from(lines: list[str]) -> list[str]:
+    """Read the conversation out of a Codex rollout file.
+
+    Probed against `~/.codex/sessions/2026/07/25/rollout-*.jsonl` — Codex
+    0.146.0-alpha.3.1, four real sessions on this machine. Every line wraps
+    its content in `payload`, and the same exchange is written twice: once as
+    an `event_msg` (`user_message` / `agent_message`, the text the two of them
+    actually exchanged) and again as `response_item` messages, which also
+    carry the harness's own injected turns — the permissions block, the
+    plugin catalogue, tool output, and a `developer` role that is not part of
+    any conversation. Reading `event_msg` alone is what keeps a Codex
+    extraction about what was said rather than about the sandbox policy.
+    """
+    roles = {"user_message": "user", "agent_message": "assistant"}
+    turns: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # a truncated last line is ordinary in a live rollout
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        role = roles.get(payload.get("type"))
+        text = payload.get("message")
+        if role is None or not isinstance(text, str) or not text.strip():
+            continue
+        turns.append(f"{role}: {text.strip()}")
+    return turns
+
+
+# An adapter is data: a glob and a parser, registered only once someone has
+# watched that glob match a real file. Claude Code and Codex are both
+# installed on the machine this was written on and both ship the transcript
+# they were probed against (`tests/fixtures/transcripts/`). Gemini, OpenCode
+# and Cursor are absent here, so they are absent from this list — a glob
+# nobody has seen match is a feature that reports success and captures
+# nothing.
 ADAPTERS: list[TranscriptFormat] = [
     TranscriptFormat(
         agent="claude-code",
         glob="~/.claude/projects/**/*.jsonl",
         parse=_turns_from,
     ),
+    TranscriptFormat(
+        agent="codex",
+        glob="~/.codex/sessions/**/*.jsonl",
+        parse=_codex_turns_from,
+    ),
 ]
+
+
+def parser_for(agent: str) -> Callable[[list[str]], list[str]]:
+    """The parser registered for an agent, or Claude Code's as the default.
+
+    The extraction path has to read a transcript in the format the agent that
+    wrote it uses. Without this the watcher would discover a Codex rollout,
+    queue it, hand it to a parser that understands a different file, and
+    extract nothing at all — discovery reporting success while capture stays
+    empty, which is exactly the failure the probing rule exists to prevent.
+    """
+    for adapter in ADAPTERS:
+        if adapter.agent == agent:
+            return adapter.parse
+    return _turns_from
 
 
 # ---------- discovery ----------
@@ -86,6 +145,36 @@ def discover(adapters: Sequence[TranscriptFormat] = ADAPTERS) -> list[tuple[Tran
             if os.path.isfile(path):
                 found.append((adapter, Path(path)))
     return found
+
+
+def probe(adapters: Sequence[TranscriptFormat] = ADAPTERS) -> list[dict]:
+    """What each registered glob matches on this machine. Enqueues nothing.
+
+    The tool the probing rule needs: an adapter may only be registered for an
+    agent someone has real transcripts from, so whoever has Codex or Cursor
+    installed has to be able to ask what a glob would match there before
+    anything is written down. A probe that ingested would cost an extraction
+    per matched file to answer that question.
+    """
+    matched: dict[str, list[Path]] = {adapter.agent: [] for adapter in adapters}
+    for adapter, path in discover(adapters):
+        matched[adapter.agent].append(path)
+    return [
+        {
+            "agent": adapter.agent,
+            "glob": adapter.glob,
+            "matched": len(matched[adapter.agent]),
+            "newest": max(matched[adapter.agent], key=_mtime, default=None),
+        }
+        for adapter in adapters
+    ]
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0  # deleted between discovery and here: old, not fatal
 
 
 # ---------- state ----------

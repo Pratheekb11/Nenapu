@@ -83,14 +83,26 @@ def session_meta_from(lines: list[str]) -> dict:
 
     Later lines win: a session can change directory, and the last thing it
     said about where it was is the most useful answer.
+
+    Two spellings, because two agents write these files. Claude Code puts
+    `sessionId` and `cwd` on every line; a Codex rollout wraps everything in
+    `payload`, where `session_meta` carries `session_id` and both it and
+    `turn_context` carry `cwd`. Probed against real transcripts from both.
+    Without the second spelling a Codex session lands with no ledger row and
+    its facts fall back to the `global` scope, which is the bug project
+    scoping was built to end.
     """
     meta = {"session_id": None, "cwd": None, "git_branch": None}
     for line in lines:
         event = _loads(line)
         if event is None:
             continue
-        meta["session_id"] = event.get("sessionId") or meta["session_id"]
-        meta["cwd"] = event.get("cwd") or meta["cwd"]
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        meta["session_id"] = (event.get("sessionId") or payload.get("session_id")
+                              or meta["session_id"])
+        meta["cwd"] = event.get("cwd") or payload.get("cwd") or meta["cwd"]
         meta["git_branch"] = event.get("gitBranch") or meta["git_branch"]
     return meta
 

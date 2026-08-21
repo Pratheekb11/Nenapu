@@ -20,6 +20,7 @@ from .loops import LoopBook
 from .maintenance import run_maintenance_tick
 from .observer import observe_transcript
 from .store import Store, project_scope
+from .watch import parser_for
 
 
 DEFAULT_LOCK_PATH = "~/.nenapu/worker.lock"
@@ -87,7 +88,11 @@ def _ingest(store: Store, job: dict) -> str:
     cwd = session["cwd"] if session else None
     scope = session["project_scope"] if session else (project_scope(cwd) if cwd else "global")
 
+    # Read the transcript with the parser belonging to the agent that wrote
+    # it: a Codex rollout read by Claude Code's parser yields an empty
+    # conversation, which looks exactly like a session that taught nothing.
     observe_transcript(
         store, transcript, session_id=job["session_id"], scope=scope, cwd=cwd,
+        parse=parser_for(job["agent"]),
     )
     return scope
