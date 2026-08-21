@@ -420,7 +420,6 @@ def test_the_command_reads_and_writes_nothing_back(tmp_path):
 g1 = pytest.mark.xfail(strict=True, reason="G1 not implemented yet: remove when it lands")
 g2 = pytest.mark.xfail(strict=True, reason="G2 not implemented yet: remove when it lands")
 g7 = pytest.mark.xfail(strict=True, reason="G7 not implemented yet: remove when it lands")
-g9 = pytest.mark.xfail(strict=True, reason="G9 not recorded yet: remove when it lands")
 
 
 def _expired(store, fact, **kw):
@@ -745,7 +744,6 @@ def _baseline_block() -> str:
     return notes[lower.index("gate baseline"):]
 
 
-@g9
 def test_the_notes_no_longer_claim_the_gate_was_never_answered():
     """The sentence being replaced, quoted so its removal is deliberate:
     "today it answers `insufficient-evidence` on 0 graded recalls out of 327
@@ -753,7 +751,6 @@ def test_the_notes_no_longer_claim_the_gate_was_never_answered():
     assert "0 graded recalls out of 327" not in _notes()
 
 
-@g9
 def test_the_notes_record_a_verdict_from_the_gate_itself():
     """Tasks 17 and 18 proceed or do not on that line, so it has to be one of
     the strings the gate can actually return rather than a summary of one."""
@@ -765,7 +762,6 @@ def test_the_notes_record_a_verdict_from_the_gate_itself():
     assert any(verdict in block for verdict in VERDICT_MEANING)
 
 
-@g9
 def test_the_baseline_records_both_populations_not_a_pooled_number():
     """"Record both populations, not a pooled number" — the baseline R2, R3,
     R4 and E7 are measured against is a pair of rates, and a single pooled
@@ -776,7 +772,6 @@ def test_the_baseline_records_both_populations_not_a_pooled_number():
     assert "unused" in block
 
 
-@g9
 def test_the_baseline_records_the_counts_it_came_from():
     """A verdict with no numbers beside it is the opinion the gate exists to
     replace. If the verdict is still `insufficient-evidence`, the reason has

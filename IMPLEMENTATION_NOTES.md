@@ -587,15 +587,44 @@ originality in the wrong place.
   transcript would produce, and that is the whole of the defence.
 - No full-store backup/restore; export is a filtered Markdown block.
 - The `anthropic` backend proper is unexercised — `exec` covers the same path.
-- Vectors and an entity tier are designed but deliberately unbuilt: the plan
-  gates both on the recall ledger showing that retrieval is what fails, and
-  building them first would invent the design that evidence is supposed to
-  choose. `nenapu retrieval` is that gate, executed rather than argued —
-  today it answers `insufficient-evidence` on 0 graded recalls out of 327
-  logged, so the open question is what grades a recall, not what indexes it.
+- The retrieval gate has been answered; the numbers it answered from are in
+  "Gate baseline, 2026-08-22" below.
 - The watcher ships two adapters, Claude Code and Codex. Gemini, OpenCode and
   Cursor need a probing session against a machine that has them installed;
   `nenapu watch --probe` is the tool for it. Codex sessions reach the ledger
   and the extractor but contribute no file events yet.
 - Ollama keeps generating after a client timeout; handled, not elegant.
 - Python 3.10 through 3.13 are run in CI; nothing outside that range is.
+
+
+## Gate baseline, 2026-08-22
+
+`nenapu retrieval` reads the recall ledger rather than an argument. On
+2026-08-22, after the grader landed and `grade --replay` ran the backlog
+through it, it returns
+**`coverage-problem`**: 303 graded recalls, 47 good, 3 bad, 253 neutral,
+1025 still pending, over 7.3 days. Read as two populations, which is what
+keeps one from drowning the other:
+
+| population | graded | good | bad | neutral | rate |
+|---|---|---|---|---|---|
+| injection | 300 | 47 | 0 | 253 | unused 84% |
+| query | 3 | 0 | 3 | 0 | bad 100% |
+
+The verdict comes from coverage: 77 sessions were given memory and 193 were
+given nothing, a coverage rate of 29% against a floor of 50%. The bad rate
+on decided recalls is 6%, well under the 30% that would have called for
+vectors. So the entity tier proceeds on graph distance and **vectors are
+not what this store needs** — the facts that arrive are mostly not wrong,
+they are mostly not used, and 193 sessions were handed nothing at all.
+
+This is the frozen baseline. Anything that changes what gets injected —
+diversity at selection, a token budget, anchoring on the work at hand,
+entity-anchored retrieval — is measured against these numbers.
+
+Two caveats recorded rather than smoothed over. 21 of the 28 replayable
+sessions were graded; the last 7 failed on `You've hit your session limit`
+and their recalls are still pending, so a later replay adds to this
+population rather than replacing it. And the injection unused-rate is
+measured over a block that no session chose: it is the number the work
+after this baseline is meant to move.
