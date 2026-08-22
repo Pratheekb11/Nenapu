@@ -321,3 +321,82 @@ def similarity_score(a: Sequence[float], b: Sequence[float]) -> float:
     which is not the same claim as being contradicted.
     """
     return max(0.0, cosine(a, b))
+
+
+# --- backfill ----------------------------------------------------------------
+
+
+def index_missing(store, *, limit: int | None = None, batch: int = 32) -> tuple[int, int]:
+    """Embed active facts that have no current vector. Returns (indexed, skipped).
+
+    "No current vector" covers three cases: a fact written before this existed,
+    a fact whose vector the invalidation trigger threw away, and a fact indexed
+    under a different model. The last one matters most -- cosine between
+    vectors from two different models is a number with no meaning, so a model
+    switch has to force a re-index rather than silently mix the spaces.
+
+    Retired facts are excluded because search never returns them, so embedding
+    them would be work nothing can use.
+
+    Bounded by `limit` so a large store can be filled in resumable chunks, and
+    tolerant of a refused write so a dry run reports zero rather than crashing.
+    """
+    conn = store.conn
+    sql = (
+        "SELECT f.id AS id, f.text AS text FROM facts f"
+        " LEFT JOIN fact_vectors v ON v.fact_id = f.id"
+        " WHERE f.status = 'active' AND (v.fact_id IS NULL OR v.model != ?)"
+        " ORDER BY f.id"
+    )
+    args: list[object] = [MODEL_NAME]
+    if limit is not None:
+        sql += " LIMIT ?"
+        args.append(limit)
+    rows = conn.execute(sql, args).fetchall()
+    if not rows:
+        return 0, 0
+    if get_embedder() is None:
+        return 0, len(rows)
+
+    indexed = skipped = 0
+    for start in range(0, len(rows), batch):
+        chunk = rows[start:start + batch]
+        vectors = embed_many([r["text"] for r in chunk])
+        if len(vectors) != len(chunk):
+            skipped += len(chunk)
+            continue
+        for row, vec in zip(chunk, vectors):
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO fact_vectors"
+                    "(fact_id, model, dim, text_sha, vec, created_at)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (row["id"], MODEL_NAME, len(vec),
+                     text_sha(row["text"]), pack(vec), _now()),
+                )
+                indexed += 1
+            except Exception:
+                skipped += 1
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return indexed, skipped
+
+
+def coverage(store) -> tuple[int, int]:
+    """(indexed, total) over active facts, for `nenapu index --status`."""
+    row = store.conn.execute(
+        "SELECT COUNT(*) AS total,"
+        " SUM(CASE WHEN v.fact_id IS NOT NULL AND v.model = ? THEN 1 ELSE 0 END) AS done"
+        " FROM facts f LEFT JOIN fact_vectors v ON v.fact_id = f.id"
+        " WHERE f.status = 'active'",
+        (MODEL_NAME,),
+    ).fetchone()
+    return int(row["done"] or 0), int(row["total"] or 0)
+
+
+def _now() -> float:
+    from .models import now
+
+    return now()

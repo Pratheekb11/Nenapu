@@ -1243,6 +1243,48 @@ def _match_project(ledger, name: str) -> str | None:
     return matches[0] if matches else None
 
 
+@app.command(rich_help_panel=UPKEEP, hidden=True)
+def index(
+    status: bool = typer.Option(False, "--status", help="Report coverage and change nothing"),
+    backfill: bool = typer.Option(False, "--backfill", help="Embed active facts that have no vector"),
+    warm: bool = typer.Option(False, "--warm", help="Download the embedding model"),
+    limit: int = typer.Option(0, "--limit", help="Stop after this many facts"),
+    db: str = DB_OPT,
+) -> None:
+    """Keep the vector index in step with the facts.
+
+    Hidden because it is upkeep between the store and an optional dependency,
+    not something to put in front of someone reading the command list.
+
+    `--warm` is the only entry point in the system permitted to download a
+    model. Every read path refuses to, because the prompt hook runs on a 10
+    second budget and a cold fetch would spend all of it.
+    """
+    from . import embeddings
+
+    if warm:
+        ok, reason = embeddings.warm()
+        console.print(f"model {embeddings.MODEL_NAME} ready" if ok
+                      else f"could not fetch {embeddings.MODEL_NAME}: {reason}")
+        return
+
+    store, _ = _stores(db)
+    if backfill:
+        usable, reason = embeddings.available()
+        if not usable:
+            # A backfill that cannot run is a state to report, not a failure:
+            # the store still works, it just has no semantic leg today.
+            console.print(f"no embedder available: {reason}")
+            return
+        indexed, skipped = embeddings.index_missing(store, limit=limit or None)
+        console.print(f"indexed {indexed}, skipped {skipped}")
+
+    done, total = embeddings.coverage(store)
+    console.print(f"{done}/{total} active facts indexed for {embeddings.MODEL_NAME}")
+    if status and not backfill and done < total:
+        console.print("run `nenapu index --backfill` to fill the rest")
+
+
 @app.command(rich_help_panel=ACTIVITY)
 def retrieval(
     window_days: int = typer.Option(MIN_DAYS_OF_DATA, "--window-days",

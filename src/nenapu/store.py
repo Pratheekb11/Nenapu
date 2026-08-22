@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from . import embeddings
 from .graph import Graph
 from .models import (
     HALF_LIFE_DAYS,
@@ -332,6 +333,7 @@ class Store:
                     continue
                 conflicts.append(self._resolve(stored, other, detail))
 
+        self._index_fact(stored.id, stored.text)
         self._journal("write", fact_id=stored.id, actor=actor, detail=fact.key)
         commit(self.conn)
         return self.get(stored.id), conflicts
@@ -452,9 +454,34 @@ class Store:
                 (text, kind or fact.kind, key if key is not None else fact.key,
                  now(), now(), fact_id),
             )
+            self._index_fact(fact_id, text)
             self._journal("revise", fact_id=fact_id, actor=actor, detail=text[:80])
             commit(self.conn)
         return self.get(fact_id)
+
+    def _index_fact(self, fact_id: int, text: str) -> None:
+        """Store a vector for this fact's text. Best effort, by design.
+
+        Every failure here is survivable and none of them is the caller's
+        problem: the embedder may be absent, the model may be uncached, the
+        connection may be a dry run refusing writes. The fact is what matters;
+        the vector is an accelerator, and a missing row is exactly the signal
+        `index_missing` looks for later. So this swallows rather than raises,
+        which is the one place in this module that is the right trade.
+        """
+        try:
+            vec = embeddings.embed_one(text)
+            if not vec:
+                return
+            self.conn.execute(
+                "INSERT OR REPLACE INTO fact_vectors"
+                "(fact_id, model, dim, text_sha, vec, created_at)"
+                " VALUES (?,?,?,?,?,?)",
+                (fact_id, embeddings.MODEL_NAME, len(vec),
+                 embeddings.text_sha(text), embeddings.pack(vec), now()),
+            )
+        except Exception:
+            return
 
     def soft_verify(self, fact_id: int, *, actor: str = "audit") -> None:
         """Re-anchor a fact on evidence read by a model rather than a command.
