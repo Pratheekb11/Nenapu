@@ -195,3 +195,46 @@ def test_unknown_theme_is_rejected(tmp_path):
                   NENAPU_HOME=str(tmp_path / "home"), NENAPU_THEME="")
     assert result.returncode != 0
     assert "unknown theme" in (result.stdout + result.stderr)
+
+
+# ---------- the silenced greeting claims nothing ----------
+#
+# Plan "Harden the four incidents into guarantees", Phase A task A4.
+# `_greet` evaluates `should_greet(store.conn)` before the environment check in
+# the same `or` expression, and `should_greet` claims: it INSERTs into `meta`
+# and commits. So a run that was told to print no banner writes a row anyway,
+# and it is the one write every `--dry-run` command performs before it reaches
+# its own guard.
+
+
+def _greeted(tmp_path) -> bool:
+    conn = connect(str(tmp_path / "s.db"))
+    try:
+        return conn.execute(
+            "SELECT 1 FROM meta WHERE key = 'greeted'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+
+def test_a_silenced_run_claims_no_greeting(tmp_path):
+    """Nothing was shown, so nothing was greeted, so nothing should be recorded."""
+    _run(["search", "anything"], tmp_path, NENAPU_NO_BANNER="1")
+
+    assert not _greeted(tmp_path), "a silenced run spent the one-time greeting"
+
+
+def test_the_greeting_still_shows_after_a_silenced_run(tmp_path):
+    """The claim exists so the orientation appears exactly once. A silenced run
+    must not consume it, or the first watching person never sees it."""
+    _run(["search", "anything"], tmp_path, NENAPU_NO_BANNER="1")
+    result = _run(["search", "anything"], tmp_path, NENAPU_NO_BANNER="")
+
+    assert "Your store lives at" in result.stderr
+
+
+def test_an_unsilenced_run_still_claims_the_greeting(tmp_path):
+    """The guard must not turn the one-time orientation into a recurring one."""
+    _run(["search", "anything"], tmp_path, NENAPU_NO_BANNER="")
+
+    assert _greeted(tmp_path)
