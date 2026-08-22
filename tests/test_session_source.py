@@ -214,3 +214,74 @@ def test_an_ended_at_the_transcript_cannot_say_is_not_invented(ledger):
 
     assert ledger.get_session(row_id)["started_at"] == TRANSCRIPT_AT
     assert ledger.get_session(row_id)["ended_at"] is None
+
+
+# ---------- found by running the repair against the real store ----------
+#
+# `backfill --redate` reported the same 49 rows moved on every run, and the
+# reason is that several transcripts can carry one session id: a resumed
+# session writes a new file that still names the session it continues. The
+# repair read each file in turn, and each rewrote the row with its own span,
+# so the row ended up on whichever file the glob happened to yield last and
+# the count never settled. Idempotence held in the tests because every
+# transcript there had a session to itself.
+
+
+def _transcript_at(root, external_id: str, name: str, *, start: str, end: str) -> None:
+    """One file claiming `external_id`, spanning `start` to `end`."""
+    (root / f"{name}.jsonl").write_text("\n".join([
+        '{"type":"user","sessionId":"%s","cwd":"/repo","timestamp":"%s",'
+        '"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}'
+        % (external_id, stamp) for stamp in (start, end)
+    ]))
+
+
+def test_one_session_spread_over_several_transcripts_settles(ledger, tmp_path):
+    """A resumed session writes a second file carrying the first one's id."""
+    root = tmp_path / "projects"
+    root.mkdir()
+    _transcript_at(root, "s-resumed", "part-b",
+                   start="2026-07-01T14:00:00Z", end="2026-07-01T15:00:00Z")
+    _transcript_at(root, "s-resumed", "part-a",
+                   start="2026-07-01T09:00:00Z", end="2026-07-01T10:00:00Z")
+    row_id = _mis_dated(ledger, "s-resumed", source="backfill", git_head_before=None)
+
+    first = redate_backfilled_sessions(ledger, str(root / "*.jsonl"))
+    second = redate_backfilled_sessions(ledger, str(root / "*.jsonl"))
+
+    assert first == 1, "one session, however many files describe it"
+    assert second == 0, "a repair that never settles is not a repair"
+    assert ledger.get_session(row_id)["started_at"] == 1_782_896_400.0  # 09:00Z
+
+
+def test_the_span_covers_every_transcript_of_the_session(ledger, tmp_path):
+    """The session ran from the first thing it said to the last, across both
+    files. Taking one file's span would report a session that ended before
+    half of its own history."""
+    root = tmp_path / "projects"
+    root.mkdir()
+    _transcript_at(root, "s-resumed", "part-a",
+                   start="2026-07-01T09:00:00Z", end="2026-07-01T10:00:00Z")
+    _transcript_at(root, "s-resumed", "part-b",
+                   start="2026-07-01T14:00:00Z", end="2026-07-01T15:00:00Z")
+    row_id = _mis_dated(ledger, "s-resumed", source="backfill", git_head_before=None)
+
+    redate_backfilled_sessions(ledger, str(root / "*.jsonl"))
+
+    row = ledger.get_session(row_id)
+    assert row["started_at"] == 1_782_896_400.0   # 09:00Z, the earliest start
+    assert row["ended_at"] == 1_782_918_000.0     # 15:00Z, the latest end
+
+
+def test_a_dry_run_counts_sessions_not_transcripts(ledger, tmp_path):
+    """Two files, one session, one row to move. Counting files told you a
+    number that no run could ever reach."""
+    root = tmp_path / "projects"
+    root.mkdir()
+    _transcript_at(root, "s-resumed", "part-a",
+                   start="2026-07-01T09:00:00Z", end="2026-07-01T10:00:00Z")
+    _transcript_at(root, "s-resumed", "part-b",
+                   start="2026-07-01T14:00:00Z", end="2026-07-01T15:00:00Z")
+    _mis_dated(ledger, "s-resumed", source="backfill", git_head_before=None)
+
+    assert redate_backfilled_sessions(ledger, str(root / "*.jsonl"), apply=False) == 1
