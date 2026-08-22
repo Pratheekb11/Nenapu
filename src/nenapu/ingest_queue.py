@@ -83,11 +83,17 @@ def release_stale_claims(
     belongs to a worker still inside its model call, and stealing it buys two
     extractions of one transcript. Everything the job carried is kept: it is
     the same job, retried.
+
+    A claim with no `claimed_at` counts as stale whatever the window. Nothing
+    produces that row on purpose — `claim_next` always sets one — which is
+    exactly why it is handled here: it can only come from something already
+    wrong, it has no age any window can protect, and requiring a timestamp
+    meant no age was ever old enough to free it.
     """
     with transaction(conn):
         cur = conn.execute(
             "UPDATE ingest_queue SET state = ?, claimed_at = NULL"
-            " WHERE state = ? AND claimed_at IS NOT NULL AND claimed_at < ?",
+            " WHERE state = ? AND (claimed_at IS NULL OR claimed_at < ?)",
             (STATE_PENDING, STATE_CLAIMED, now() - older_than),
         )
         commit(conn)
