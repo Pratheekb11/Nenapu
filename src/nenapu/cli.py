@@ -1810,6 +1810,92 @@ def _install_watch_unit(console_out, *, yes: bool = False) -> None:
     console_out.print("  [dim]systemctl --user enable --now nenapu-watch[/]")
 
 
+def _age(seconds: float) -> str:
+    """How long a claim has been held, in the unit a person would say it in."""
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{int(seconds / 60)}m"
+    if seconds < 172800:
+        return f"{int(seconds / 3600)}h"
+    return f"{int(seconds / 86400)}d"
+
+
+@app.command(rich_help_panel=UPKEEP)
+def queue(
+    release: bool = typer.Option(False, "--release",
+                                 help="Return claims whose worker never came back"),
+    older_than: float = typer.Option(
+        None, "--older-than",
+        help="With --release: seconds a claim may go unfinished (default one hour)",
+    ),
+    db: str = DB_OPT,
+) -> None:
+    """What the ingestion queue is holding, and a door out of a stranded job.
+
+    A claim used to outlive the worker that took it with no way back: nothing
+    released one, `enqueue_once` refuses to re-queue a path that is pending or
+    claimed, and so a worker killed mid-job stranded that job permanently. A
+    worker now releases claims older than an hour when it takes the lock, but
+    that only helps someone who knows a drain is what reaps. This is the part
+    that says what is stuck, and frees it on request.
+
+    `failed` jobs are shown for the same reason: nothing else surfaces them, so
+    a transcript that cannot be read fails silently and stays failed.
+    """
+    from .ingest_queue import STALE_CLAIM_SECONDS, release_stale_claims
+
+    store, _ = _stores(db)
+    if release:
+        window = STALE_CLAIM_SECONDS if older_than is None else older_than
+        freed = release_stale_claims(store.conn, older_than=window)
+        console.print(f"{freed} claim(s) released")
+        return
+
+    counts = list(store.conn.execute(
+        "SELECT state, COUNT(*) AS n FROM ingest_queue GROUP BY state ORDER BY state"
+    ))
+    if not counts:
+        console.print("[dim]the queue is empty[/]")
+        return
+
+    table = Table()
+    table.add_column("state", style="cyan")
+    table.add_column("jobs", justify="right")
+    for row in counts:
+        table.add_row(row["state"], str(row["n"]))
+    console.print(table)
+
+    # The age is the whole diagnosis: minutes means a worker still inside its
+    # model call, hours means a worker that died.
+    claimed = list(store.conn.execute(
+        "SELECT path, claimed_at FROM ingest_queue WHERE state = 'claimed'"
+        " ORDER BY claimed_at"
+    ))
+    if claimed:
+        held = Table(title="claimed")
+        held.add_column("held for", justify="right")
+        held.add_column("transcript")
+        for row in claimed:
+            age = ("unknown" if row["claimed_at"] is None
+                   else _age(now() - row["claimed_at"]))
+            held.add_row(age, Path(row["path"]).name)
+        console.print(held)
+        console.print("[dim]nenapu queue --release returns claims older than an hour[/]")
+
+    failed = list(store.conn.execute(
+        "SELECT path, detail FROM ingest_queue WHERE state = 'failed'"
+        " ORDER BY finished_at DESC LIMIT 20"
+    ))
+    if failed:
+        broken = Table(title="failed")
+        broken.add_column("transcript")
+        broken.add_column("why", style="dim")
+        for row in failed:
+            broken.add_row(Path(row["path"]).name, row["detail"] or "-")
+        console.print(broken)
+
+
 @app.command(rich_help_panel=UPKEEP)
 def drain(
     limit: int = typer.Option(20, "--limit", help="Most jobs to process in one pass"),
