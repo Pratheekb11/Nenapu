@@ -130,3 +130,51 @@ def test_a_heavier_job_does_not_rerun_before_its_cadence_elapses(store):
         second_calls = mock_audit.call_count
 
     assert second_calls == first_calls, "audit re-ran before its cadence elapsed"
+
+
+def test_a_scopes_first_ever_tick_does_not_run_audit(store):
+    """CI bug found 2026-08-22: `_due` reads "never run before" as "due now",
+    so the very first tick any scope ever gets fires a real `run_audit` model
+    call before the cadence window it is supposed to wait for has had any
+    chance to elapse. On a machine with no backend configured (any CI runner,
+    any fresh install before a key is set) that call raises `LLMUnavailable`
+    and takes the whole tick down with it. The first touch should seed the
+    cadence clock, not spend it."""
+    from nenapu.maintenance import run_maintenance_tick
+
+    with patch("nenapu.maintenance.run_audit") as mock_audit:
+        run_maintenance_tick(store, touched_scopes=["repo:demo@aaaaaaaa"])
+
+    mock_audit.assert_not_called()
+
+
+def test_a_scopes_first_ever_tick_does_not_run_check(store):
+    """Same bug, `check`'s half: grouped with audit in the docstring as
+    "cost real money or time", so it gets the same grace period."""
+    from nenapu.maintenance import run_maintenance_tick
+
+    with patch("nenapu.maintenance.run_check") as mock_check:
+        run_maintenance_tick(store, touched_scopes=["repo:demo@aaaaaaaa"])
+
+    mock_check.assert_not_called()
+
+
+def test_audit_runs_once_the_cadence_has_elapsed_from_the_scopes_first_touch(store):
+    """The seed must not silence audit forever — once a full cadence window
+    has actually passed since the scope's first touch, the next tick runs it."""
+    from nenapu import maintenance
+
+    with patch.object(maintenance, "run_audit") as mock_audit:
+        maintenance.run_maintenance_tick(store, touched_scopes=["repo:demo@aaaaaaaa"])
+
+    stale = time.time() - maintenance.AUDIT_CADENCE_SECONDS - 60
+    store.conn.execute(
+        "UPDATE meta SET value = ? WHERE key = 'maintenance:last_run:audit:repo:demo@aaaaaaaa'",
+        (str(stale),),
+    )
+    store.conn.commit()
+
+    with patch.object(maintenance, "run_audit") as mock_audit:
+        maintenance.run_maintenance_tick(store, touched_scopes=["repo:demo@aaaaaaaa"])
+
+    mock_audit.assert_called_once()

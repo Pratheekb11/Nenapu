@@ -17,6 +17,7 @@ respectively. Type at scale survives a terminal; small illustrations do not.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 # 30 columns wide: with the info column and padding this fits an 80-column
 # terminal, which is still the width to design for.
@@ -52,7 +53,6 @@ def config_path() -> "Path":
     routine commands must not have to open a database to know what colour to
     be.
     """
-    from pathlib import Path
 
     from .db import default_db_path
 
@@ -234,7 +234,6 @@ def panel(console, *, version: str = "", conn: sqlite3.Connection | None = None,
     lines above the top of the screen and nobody ever seeing it.
     """
     from rich.table import Table
-    from rich.text import Text
 
     unicode = _unicode(console)
     shades = hero_shades()

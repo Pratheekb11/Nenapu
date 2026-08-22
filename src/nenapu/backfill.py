@@ -71,6 +71,52 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
     return row_id
 
 
+def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
+                               apply: bool = True) -> int:
+    """Move sessions an earlier backfill mis-dated onto their own clock.
+
+    Until this was fixed, `backfill_transcript` stamped the row with the
+    moment the backfill ran, so weeks of history read as one afternoon. The
+    parser is fixed; these are the rows it already wrote, and the transcripts
+    are still on disk, so the true times are recoverable rather than lost.
+
+    Only rows with no start of their own are touched. A session the
+    SessionStart hook recorded has `git_head_before`, written at the moment
+    the session actually began, which is a better answer than anything a
+    transcript can be read to say — and overwriting it would lose the one
+    field that cannot be recovered afterwards. Repairs only; a transcript
+    with no row yet is a job for a plain backfill.
+
+    With `apply=False` it counts what it would move and writes nothing, which
+    is what `--dry-run` promises.
+    """
+    moved = 0
+    for path in transcripts_matching(glob_pattern):
+        lines = read_lines(path)
+        session_id = session_meta_from(lines)["session_id"]
+        if not session_id:
+            continue
+        row = ledger.get_session(session_id)
+        if row is None or row["git_head_before"] is not None:
+            continue
+        started_at, ended_at = session_span_from(lines)
+        if started_at is None:
+            continue
+        if _already_dated(row, started_at, ended_at):
+            continue
+        if apply:
+            ledger.redate_session(row["id"], started_at=started_at, ended_at=ended_at)
+        moved += 1
+    return moved
+
+
+def _already_dated(row: dict, started_at: float, ended_at: float | None) -> bool:
+    """Has this row already been moved? Re-running must change nothing."""
+    return (abs(row["started_at"] - started_at) < 1.0
+            and (ended_at is None
+                 or (row["ended_at"] is not None and abs(row["ended_at"] - ended_at) < 1.0)))
+
+
 def transcripts_matching(glob_pattern: str) -> list[str]:
     """Every file the pattern names, oldest path first.
 

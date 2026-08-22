@@ -274,3 +274,161 @@ def test_after_a_backfill_the_ledger_queries_answer(projects, db):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "s-a" in result.stdout or "repo-a" in result.stdout or "claude-code" in result.stdout
+
+
+# ==========================================================================
+# `--redate` · repairing sessions an earlier backfill mis-dated
+#
+# Found on 2026-08-22. Until this pass `backfill_transcript` stamped the
+# session row with the moment the backfill ran. The parser is fixed, but the
+# rows an earlier run wrote still claim history happened this week, and three
+# things read `sessions.started_at` believing it: the retrieval gate's
+# coverage measure, "Where you left off", and the rollups. The transcripts
+# are still on disk, so the true times are recoverable rather than lost.
+#
+# Deliberately a separate flag rather than something a plain backfill does:
+# re-dating rewrites rows that already exist, and a command that quietly
+# rewrote the ledger every time it was run would be a worse thing to own than
+# the bug it fixes.
+# ==========================================================================
+
+
+def _epoch(ts: str) -> float:
+    from datetime import datetime, timezone
+
+    return datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(
+        tzinfo=timezone.utc).timestamp()
+
+
+def _dated(session, cwd, path, *, ts):
+    return json.dumps({
+        "type": "assistant", "sessionId": session, "cwd": cwd, "timestamp": ts,
+        "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": path}},
+        ]},
+    })
+
+
+@pytest.fixture
+def dated_projects(tmp_path):
+    root = tmp_path / ".claude" / "projects"
+    (root / "repo-a").mkdir(parents=True)
+    (root / "repo-a" / "s-old.jsonl").write_text("\n".join([
+        _dated("s-old", "/repo-a", "app/a.py", ts="2026-06-01T09:00:00Z"),
+        _dated("s-old", "/repo-a", "app/b.py", ts="2026-06-01T10:30:00Z"),
+    ]))
+    return root
+
+
+def _mis_dated_row(db, projects, session_id="s-old"):
+    """A row in the state an earlier backfill left behind: right session,
+    wrong clock."""
+    from nenapu.activity import ActivityLedger
+    from nenapu.models import now
+
+    ledger = ActivityLedger(connect(str(db)))
+    ledger.start_session(agent="claude-code", project_scope="repo:repo-a@aaaaaaaa",
+                         cwd="/repo-a", external_id=session_id, started_at=now())
+    return ledger
+
+
+def test_redate_is_a_registered_flag(db):
+    result = _run(["backfill", "--help"], db)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--redate" in result.stdout
+
+
+def test_redate_moves_a_session_to_the_time_its_transcript_says(dated_projects, db):
+    _mis_dated_row(db, dated_projects)
+
+    result = _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    row = next(s for s in _sessions(db) if s["external_id"] == "s-old")
+    assert row["started_at"] == pytest.approx(_epoch("2026-06-01T09:00:00Z"), abs=1)
+
+
+def test_redate_reports_how_many_rows_it_moved(dated_projects, db):
+    _mis_dated_row(db, dated_projects)
+
+    result = _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert "1" in result.stdout
+
+
+def test_redate_is_idempotent(dated_projects, db):
+    _mis_dated_row(db, dated_projects)
+    _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+    first = _sessions(db)
+
+    _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert _sessions(db) == first
+
+
+def test_redate_leaves_a_session_the_hook_recorded_alone(dated_projects, db):
+    """A live session's `started_at` was written by the SessionStart hook at
+    the moment it began, which is a better answer than anything a transcript
+    can be read to say. Only a row with no start of its own is repaired."""
+    from nenapu.activity import ActivityLedger
+    from nenapu.models import now
+
+    ledger = ActivityLedger(connect(str(db)))
+    hooked = now() - 120
+    ledger.start_session(agent="claude-code", project_scope="repo:repo-a@aaaaaaaa",
+                         cwd="/repo-a", external_id="s-old", started_at=hooked,
+                         git_head_before="a" * 40)
+
+    _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    row = next(s for s in _sessions(db) if s["external_id"] == "s-old")
+    assert row["started_at"] == pytest.approx(hooked, abs=1)
+
+
+def test_redate_ingests_nothing_new(dated_projects, db):
+    """It repairs what is there. A transcript with no row yet is a job for a
+    plain backfill, and doing both in one flag would hide which one ran."""
+    result = _run(["backfill", "--redate", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _sessions(db) == []
+
+
+def test_a_plain_backfill_does_not_redate(dated_projects, db):
+    """The rows a backfill already wrote are left where they are unless the
+    flag asks. A command that quietly rewrote the ledger on every run would be
+    worse to own than the bug."""
+    from nenapu.models import now
+
+    _mis_dated_row(db, dated_projects)
+    before = next(s for s in _sessions(db) if s["external_id"] == "s-old")["started_at"]
+
+    _run(["backfill", "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    row = next(s for s in _sessions(db) if s["external_id"] == "s-old")
+    assert row["started_at"] == pytest.approx(before, abs=1)
+    assert row["started_at"] == pytest.approx(now(), abs=60)
+
+
+def test_a_dry_run_redate_writes_nothing(dated_projects, db):
+    """`--dry-run` is the flag that promises nothing happens. A combination
+    that ignores it and rewrites the ledger anyway is worse than not offering
+    it: found by running exactly that against a real store."""
+    _mis_dated_row(db, dated_projects)
+    before = _sessions(db)
+
+    result = _run(["backfill", "--redate", "--dry-run",
+                   "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _sessions(db) == before
+
+
+def test_a_dry_run_redate_reports_what_it_would_move(dated_projects, db):
+    _mis_dated_row(db, dated_projects)
+
+    result = _run(["backfill", "--redate", "--dry-run",
+                   "--glob", f"{dated_projects}/**/*.jsonl"], db)
+
+    assert "1" in result.stdout

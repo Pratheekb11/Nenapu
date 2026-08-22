@@ -58,6 +58,21 @@ class ActivityLedger:
             )
             commit(self.conn)
 
+    def redate_session(self, session_id: int, *, started_at: float,
+                       ended_at: float | None = None) -> None:
+        """Correct when a session happened, for a row that was recorded from
+        history rather than watched as it ran. `ended_at` is left alone when
+        the transcript cannot say."""
+        with transaction(self.conn):
+            if ended_at is None:
+                self.conn.execute("UPDATE sessions SET started_at = ? WHERE id = ?",
+                                  (started_at, session_id))
+            else:
+                self.conn.execute(
+                    "UPDATE sessions SET started_at = ?, ended_at = ? WHERE id = ?",
+                    (started_at, ended_at, session_id))
+            commit(self.conn)
+
     def get_session(self, session_id: int | str) -> dict | None:
         """Looks up by the internal row id or by `external_id` — a transcript's
         own session id, which backfill uses to detect a session already

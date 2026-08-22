@@ -64,6 +64,23 @@ def _due(store: Store, key: str, cadence_seconds: float) -> bool:
     return last is None or (now() - last) >= cadence_seconds
 
 
+def _run_on_cadence(store: Store, key: str, cadence_seconds: float, job) -> None:
+    """Run `job` on its cadence, but seed rather than fire on `key`'s first
+    ever tick. `_due` reads "never run before" as "due now", which is right
+    for cheap, unscoped jobs like the rollup fold but wrong for one that
+    costs real money or time (`audit`, `check`): a scope's first touch would
+    otherwise front-load a real model call before the cadence window it is
+    meant to wait for has ever had a chance to elapse, and fail outright on
+    any machine with no backend configured at all.
+    """
+    if _last_run(store, key) is None:
+        _mark_run(store, key)
+        return
+    if _due(store, key, cadence_seconds):
+        job()
+        _mark_run(store, key)
+
+
 def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) -> None:
     """Run whatever upkeep is due.
 
@@ -72,7 +89,9 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     cadence. `dedupe` runs once per scope the worker just wrote to, since
     duplicates can only appear where something was just ingested. `audit`
     and `check` cost real money or time, so they run per touched scope on
-    their own longer cadence, tracked in `meta`.
+    their own longer cadence, tracked in `meta` — and a scope's first ever
+    tick seeds that cadence rather than spending it, so touching a scope for
+    the first time never fires a real model call on the spot.
     """
     store.ledger.expire_pending()
     _mark_run(store, "expire_pending")
@@ -104,10 +123,8 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
     for scope in touched_scopes:
         dedupe(store, scope=scope)
 
-        if _due(store, f"audit:{scope}", AUDIT_CADENCE_SECONDS):
-            run_audit(store, scope=scope)
-            _mark_run(store, f"audit:{scope}")
+        _run_on_cadence(store, f"audit:{scope}", AUDIT_CADENCE_SECONDS,
+                        lambda scope=scope: run_audit(store, scope=scope))
 
-        if _due(store, f"check:{scope}", CHECK_CADENCE_SECONDS):
-            run_check(store, scope=scope)
-            _mark_run(store, f"check:{scope}")
+        _run_on_cadence(store, f"check:{scope}", CHECK_CADENCE_SECONDS,
+                        lambda scope=scope: run_check(store, scope=scope))

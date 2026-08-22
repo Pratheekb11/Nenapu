@@ -1128,6 +1128,8 @@ def backfill(
                                 help="Transcripts to replay"),
     agent: str = typer.Option("claude-code", "--agent", help="Which agent wrote them"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be ingested"),
+    redate: bool = typer.Option(False, "--redate",
+                                help="Repair sessions an earlier backfill mis-dated"),
     db: str = DB_OPT,
 ) -> None:
     """Replay transcripts already on disk into the activity ledger.
@@ -1136,10 +1138,23 @@ def backfill(
     what makes "where did I leave off" answerable on a machine whose history
     predates the ledger, and it is safe to run again — a session already
     recorded is left alone, while transcripts written since are picked up.
+
+    `--redate` repairs instead of ingesting: an earlier backfill stamped its
+    rows with the moment it ran rather than the moment the session happened,
+    and the coverage measure, "where you left off" and the rollups all read
+    that field. It is a separate flag because rewriting rows that already
+    exist should be asked for, not done quietly on every run.
     """
-    from .backfill import backfill_directory, would_backfill
+    from .backfill import backfill_directory, redate_backfilled_sessions, would_backfill
 
     ledger = _ledger(db)
+    if redate:
+        # `--dry-run` wins over every mode: it is the flag that promises
+        # nothing happens, and a combination that wrote anyway would be worse
+        # than not offering it.
+        moved = redate_backfilled_sessions(ledger, pattern, apply=not dry_run)
+        console.print(f"{moved} session(s) {'would be redated' if dry_run else 'redated'}")
+        return
     if dry_run:
         console.print(f"{would_backfill(ledger, pattern)} session(s) would be ingested")
         return

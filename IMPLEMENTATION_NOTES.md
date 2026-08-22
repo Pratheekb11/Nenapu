@@ -611,23 +611,36 @@ originality in the wrong place.
 ## Gate baseline, 2026-08-22
 
 `nenapu retrieval` reads the recall ledger rather than an argument. On
-2026-08-22, after the grader landed and `grade --replay` ran the backlog
-through it, it returns
-**`coverage-problem`**: 303 graded recalls, 47 good, 3 bad, 253 neutral,
-1025 still pending, over 7.3 days. Read as two populations, which is what
-keeps one from drowning the other:
+2026-08-22, after the grader landed, `grade --replay` ran the backlog
+through it, and `backfill --redate` repaired the session dates the gate
+reads, it returns **`retrieval-is-not-the-problem`**: 411 graded recalls,
+62 good, 3 bad, 346 neutral, over 7.7 days. Read as two populations, which
+is what keeps one from drowning the other:
 
 | population | graded | good | bad | neutral | rate |
 |---|---|---|---|---|---|
-| injection | 300 | 47 | 0 | 253 | unused 84% |
+| injection | 408 | 62 | 0 | 346 | unused 85% |
 | query | 3 | 0 | 3 | 0 | bad 100% |
 
-The verdict comes from coverage: 77 sessions were given memory and 193 were
-given nothing, a coverage rate of 29% against a floor of 50%. The bad rate
-on decided recalls is 6%, well under the 30% that would have called for
-vectors. So the entity tier proceeds on graph distance and **vectors are
-not what this store needs** — the facts that arrive are mostly not wrong,
-they are mostly not used, and 193 sessions were handed nothing at all.
+The bad rate on decided recalls is 4.6%, well under the 30% that would have
+called for vectors, and coverage is 93 sessions given memory against 70
+given nothing, 57% against a floor of 50%. So **vectors are not what this
+store needs**: the facts that arrive are mostly not wrong. What they mostly
+are is unused, which is a selection question rather than a ranking one, and
+the answer to it is the anchoring work rather than an embedding index.
+
+**The first reading of this gate was wrong, and how it was wrong is worth
+keeping.** It reported `coverage-problem` on 29% coverage: 193 sessions
+counted as live sessions handed nothing. They were not live sessions. They
+were history reconstructed by `nenapu backfill`, which stamped every row
+with the moment the backfill ran rather than the moment the session
+happened — so weeks of transcripts read as one busy afternoon inside the
+hook era, which is exactly the population the coverage measure documents
+itself as excluding. The parser now reads the transcript's own clock, which
+it was already doing for every file event, and `backfill --redate` moved
+the 237 rows an earlier run had mis-stamped. The lesson is not about
+coverage: three separate things read `sessions.started_at` and believed it,
+and a measurement is only as good as the timestamps underneath it.
 
 This is the frozen baseline. Anything that changes what gets injected —
 diversity at selection, a token budget, anchoring on the work at hand,
@@ -642,9 +655,8 @@ block, and the ones in the ledger all ran against the old one. Re-run
 `nenapu retrieval` after a week of sessions and compare against the
 injection row above.
 
-Two caveats recorded rather than smoothed over. 21 of the 28 replayable
-sessions were graded; the last 7 failed on `You've hit your session limit`
-and their recalls are still pending, so a later replay adds to this
-population rather than replacing it. And the injection unused-rate is
-measured over a block that no session chose: it is the number the work
-after this baseline is meant to move.
+One caveat recorded rather than smoothed over: the injection unused-rate is
+measured over a block that no session chose, and every graded session ran
+against the block as it was before the anchoring work. It is the number that
+work is meant to move, and it can only be judged by sessions that run
+against the new block.
