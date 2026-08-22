@@ -1516,7 +1516,13 @@ def learn(
     # Below here the work is inline, so the ledger half runs first: the model
     # half can be skipped or unavailable, and none of that changes what the
     # session did to the files.
-    _capture_activity(path, session_id, db)
+    #
+    # Not under `--dry-run`, though. Capture is a write — a `sessions` row, its
+    # `file_events`, the git evidence and the entities built from them — and it
+    # used to run before the flag was consulted at all, so a dry run that could
+    # not even reach the model had already changed the store.
+    if not dry_run:
+        _capture_activity(path, session_id, db)
 
     if no_infer:
         # Never calls the model — the whole point is a cheap way to inspect
