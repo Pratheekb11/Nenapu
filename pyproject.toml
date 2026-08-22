@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0,<10", "httpx>=0.27,<1.0"]
+lint = ["ruff>=0.6,<1.0"]
 
 [project.scripts]
 nenapu = "nenapu.cli:app"
@@ -39,3 +40,13 @@ packages = ["src/nenapu"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# F: real bugs (unused imports/names, undefined names). Line-length and
+# import-sort are this repo's own style choice (see test names past 88
+# cols throughout tests/) and are not what a correctness gate is for.
+select = ["F"]
