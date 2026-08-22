@@ -23,6 +23,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0,<10", "httpx>=0.27,<1.0"]
 lint = ["ruff>=0.6,<1.0"]
+# Semantic retrieval. Optional on purpose: FTS5 and the belief layer are the
+# floor, and a store must stay searchable on a machine that never installed
+# this. fastembed rather than sentence-transformers because the latter pulls
+# torch, roughly 800MB, to do inference this does in ONNX in about 50.
+embeddings = ["fastembed>=0.4,<1.0"]
 
 [project.scripts]
 nenapu = "nenapu.cli:app"
