@@ -174,12 +174,10 @@ def test_reasserting_a_fact_still_picks_up_this_session_dependencies(store, appr
 # plus the fact's subject entity and its neighbourhood, so a human sees why a
 # fact *surfaced*, not only why it is *believed*.
 #
-# Strict xfail on everything not yet implemented; remove the marker as each
-# task lands.
+# These tasks have landed; the strict xfail markers they were written under
+# are gone.
 # ==========================================================================
 
-g10 = pytest.mark.xfail(strict=True, reason="G10 not implemented yet: remove when it lands")
-e10 = pytest.mark.xfail(strict=True, reason="E10 not implemented yet: remove when it lands")
 
 
 def _graded_recall(store, fact_id, outcome, *, session_id):

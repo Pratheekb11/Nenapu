@@ -734,7 +734,6 @@ def test_with_no_activity_history_the_block_is_todays_block(store):
 # fix and vectors may never be needed.
 # ==========================================================================
 
-e7 = pytest.mark.xfail(strict=True, reason="E7 not implemented yet: remove when it lands")
 
 
 def test_the_block_reaches_a_fact_about_a_neighbouring_file(store, ledger):

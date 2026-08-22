@@ -108,7 +108,6 @@ def test_the_recall_hook_keeps_its_name():
 # OUTCOMES whose ids `misled` accepts, not the word.
 # ==========================================================================
 
-g8 = pytest.mark.xfail(strict=True, reason="G8 not implemented yet: remove when it lands")
 
 UNGRADED = "ungraded"
 

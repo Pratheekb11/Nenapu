@@ -408,18 +408,13 @@ def test_the_command_reads_and_writes_nothing_back(tmp_path):
 # ==========================================================================
 # Pre-written for the grading plan: G1, G2, G7, G9.
 #
-# Written before the implementation, per the plan's TDD rule. Every test
-# below that describes behaviour the code does not have yet carries a strict
-# xfail, so the suite stays honest today and turns red the moment a marker
-# outlives its implementation — remove the marker when the task lands.
+# Written before the implementation, per the plan's TDD rule, under strict
+# xfail markers. The tasks have landed and the markers are gone.
 #
 # The helpers above are reused unchanged. `_recall` already takes `source`,
 # which is what G1 turns into a load-bearing distinction.
 # ==========================================================================
 
-g1 = pytest.mark.xfail(strict=True, reason="G1 not implemented yet: remove when it lands")
-g2 = pytest.mark.xfail(strict=True, reason="G2 not implemented yet: remove when it lands")
-g7 = pytest.mark.xfail(strict=True, reason="G7 not implemented yet: remove when it lands")
 
 
 def _expired(store, fact, **kw):

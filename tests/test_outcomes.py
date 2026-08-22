@@ -176,7 +176,6 @@ def test_repeated_soft_confirmation_still_fades(store, approve_all):
 # fact doing the superseding.
 # ==========================================================================
 
-g3 = pytest.mark.xfail(strict=True, reason="G3 not implemented yet: remove when it lands")
 
 EIGHT_HOURS = 8 * 3600.0
 

@@ -70,10 +70,6 @@ from nenapu import connect
 from nenapu.models import Fact, Kind, Origin, Status, now
 from nenapu.store import Store
 
-e1 = pytest.mark.xfail(strict=True, reason="E1 not implemented yet: remove when it lands")
-e2 = pytest.mark.xfail(strict=True, reason="E2 not implemented yet: remove when it lands")
-e3 = pytest.mark.xfail(strict=True, reason="E3 not implemented yet: remove when it lands")
-e4 = pytest.mark.xfail(strict=True, reason="E4 not implemented yet: remove when it lands")
 
 DAY = 86400.0
 SCOPE = "repo:backend@aaaaaaaa"

@@ -148,8 +148,6 @@ def test_task_outcome_grades_a_session(tmp_path, monkeypatch):
 
 import pytest
 
-g8 = pytest.mark.xfail(strict=True, reason="G8 not implemented yet: remove when it lands")
-e10 = pytest.mark.xfail(strict=True, reason="E10 not implemented yet: remove when it lands")
 
 
 def _tool(m, name):
