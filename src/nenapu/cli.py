@@ -405,7 +405,11 @@ def _greet(store) -> None:
     """First-run orientation, under the full panel."""
     from .banner import FIRST_RUN_HELP, should_greet
 
-    if not should_greet(store.conn) or os.environ.get("NENAPU_NO_BANNER"):
+    # The environment check first, because `should_greet` claims: it writes a
+    # `meta` row and commits. Asked in the old order, a silenced run spent the
+    # one-time orientation without showing it, and every command paid that
+    # write before reaching its own `--dry-run` guard.
+    if os.environ.get("NENAPU_NO_BANNER") or not should_greet(store.conn):
         return
     path = store.conn.execute("PRAGMA database_list").fetchone()[2] or ":memory:"
     err_console.print()
