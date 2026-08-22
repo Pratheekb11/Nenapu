@@ -16,6 +16,7 @@ from rich.table import Table
 from . import __version__, open_store
 from .audit import LLMUnavailable
 from .audit import audit as run_audit
+from .db import deny_writes
 from .distill import distill as run_distill
 from .export import render, write_file
 from .models import Fact, Kind, Skill, Status
@@ -416,9 +417,18 @@ def _greet(store) -> None:
     err_console.print(FIRST_RUN_HELP.format(path=path))
 
 
-def _stores(db: str | None):
+def _stores(db: str | None, *, readonly: bool = False):
+    """Open the store, and under `--dry-run` open it unable to write.
+
+    The flag used to be a boolean every write path had to remember to consult,
+    and the paths that forgot were only found by running the command against a
+    real store. Enforced once, here, so a command cannot promise a dry run and
+    write anyway.
+    """
     store, skills = open_store(db or os.environ.get("NENAPU_DB"))
     _greet(store)
+    if readonly:
+        deny_writes(store.conn)
     return store, skills
 
 
@@ -738,7 +748,7 @@ def audit(
 
     Local backends report without acting unless you pass --apply.
     """
-    store, _ = _stores(db)
+    store, _ = _stores(db, readonly=dry_run)
     evidence = Path(evidence_file).read_text() if evidence_file else ""
     try:
         report = run_audit(
@@ -1057,10 +1067,10 @@ def _parse_since(spec: str) -> float:
     return float(n) * _DURATION_UNITS[unit]
 
 
-def _ledger(db: str | None):
+def _ledger(db: str | None, *, readonly: bool = False):
     from .activity import ActivityLedger
 
-    store, _ = _stores(db)
+    store, _ = _stores(db, readonly=readonly)
     return ActivityLedger(store.conn)
 
 
@@ -1151,7 +1161,7 @@ def backfill(
     """
     from .backfill import backfill_directory, redate_backfilled_sessions, would_backfill
 
-    ledger = _ledger(db)
+    ledger = _ledger(db, readonly=dry_run)
     if redate:
         # `--dry-run` wins over every mode: it is the flag that promises
         # nothing happens, and a combination that wrote anyway would be worse
@@ -1463,6 +1473,23 @@ def _spawn_worker(db: str | None) -> None:
         pass  # a hook must never break the session it is attached to
 
 
+def _learn_store(db: str | None, *, from_stdin: bool, readonly: bool):
+    """The store `learn` works against, guarded when the run is a dry one.
+
+    One place decides, because the two branches below it are identical and the
+    second was where `--dry-run` used to be forgotten.
+    """
+    if from_stdin:
+        # The detached child has no terminal to greet; opening plainly keeps
+        # the first-run orientation for the run where a person is watching.
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        if readonly:
+            deny_writes(store.conn)
+        return store
+    store, _ = _stores(db, readonly=readonly)
+    return store
+
+
 @app.command("learn", rich_help_panel=UPKEEP)
 @alias("observe", UPKEEP)
 def learn(
@@ -1540,8 +1567,7 @@ def learn(
     if no_infer:
         # Never calls the model — the whole point is a cheap way to inspect
         # what a transcript contains without spending an extraction on it.
-        store, _ = (open_store(db or os.environ.get("NENAPU_DB")) if from_stdin
-                    else _stores(db))
+        store = _learn_store(db, from_stdin=from_stdin, readonly=dry_run)
         pairs = messages_from_transcript(Path(path))
         # `--no-infer` skips the model, not the flag that promises nothing
         # happens: this branch used to write regardless of `--dry-run`.
@@ -1558,10 +1584,7 @@ def learn(
         return
 
     try:
-        # The detached child has no terminal to greet; opening plainly keeps
-        # the first-run orientation for the run where a person is watching.
-        store, _ = (open_store(db or os.environ.get("NENAPU_DB")) if from_stdin
-                    else _stores(db))
+        store = _learn_store(db, from_stdin=from_stdin, readonly=dry_run)
         learned = observe_transcript(
             store, Path(path),
             session_id=session_id or os.environ.get("NENAPU_SESSION_ID"),
