@@ -716,3 +716,63 @@ read as the thing itself:
   filter required the timestamp it was missing. Nothing produces that row on
   purpose, which is why it is handled: it can only come from something already
   wrong, and what it leaves behind is the permanent strand.
+
+
+## What the four fixes actually do on real data, 2026-08-22
+
+Run against a copy of the store, taken with SQLite's backup API from a
+read-only connection so the live file was never opened for writing. Every
+number below is from that copy.
+
+**A claim that outlived its worker.** Enqueued a job, claimed it, aged the
+claim four hours. `enqueue_once` refused the path while it was stranded, which
+is the strand: nothing could re-queue it. `release_stale_claims` freed it, the
+job came back as `pending`, and it kept its `session_id`. Holds.
+
+**Bounded replay.** `--limit 5` queued five. An unbounded replay straight
+after queued fifty-six more, on a store with sixty-three sessions still
+holding pending recalls. The shape that produced "asked for seven, queued
+fifty-two" is still there in the data; the bound is what makes it a choice.
+
+**The queue was hiding seven failures.** `nenapu queue` on the copy showed 56
+done and 7 failed, every failure the same: ``claude -p`` exited 1 after 3
+attempts, session limit reached. Those seven transcripts were never extracted
+and nothing anywhere said so. `failed` is terminal, and until now no command
+printed it.
+
+**`--redate --dry-run`.** Reported 41 sessions it would move and left the file
+byte-identical, md5 and the sum of every `started_at` both unchanged.
+
+**`learn --dry-run`** with the model unavailable left the session count at
+290. Before this pass it would have written a session row, its file events and
+its entities before failing at the model call it was previewing.
+
+**What did not hold.** `backfill --redate` reported the same 49 rows moved on
+every run. A resumed session writes a new transcript that still carries the id
+of the session it continues, and the repair read each file in turn, so one row
+was rewritten once per transcript and landed on whichever the glob yielded
+last. Three files claimed row 14 alone. The spans are now unioned per session,
+earliest start to latest end; the same store now reports 8 and then 0. The
+tests missed it because every transcript in them had a session to itself,
+which is the same shape of blind spot as the dry-run tests that only ever
+called `observe_transcript` directly.
+
+Both bugs found this pass, and all four before them, came from running the
+command against real data. None came from review.
+
+**A note on the vacuous negative assertions.** `MEMORY.md` recorded that some
+E7/E8 tests pass without asserting anything. Two do:
+`test_traversal_does_not_cross_scope` and
+`test_the_anchor_does_not_traverse_out_of_the_project`. Deleting the `_in_scope`
+filter from `proximity_scores` leaves all 152 tests in the three affected files
+passing, because both go through `Store.search`, which already restricts its
+pool by scope, so the score computed for an out-of-scope fact never reaches
+what they assert about. They are true end to end and are left alone;
+`tests/test_proximity_scope_guard.py` asks `proximity_scores` directly and does
+turn red when the guard goes.
+
+Separately, thirteen `pytest.mark.xfail` marker variables (`e1`-`e4`, `e7`,
+`e10`, `g1`-`g3`, `g7`, `g8`, `g10`) are defined across seven test files and
+applied to nothing. Their tasks landed and the markers were removed from the
+tests without removing the definitions. They are dead, and a reader should not
+read "not implemented yet" from them.
