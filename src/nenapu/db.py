@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def default_db_path() -> Path:
@@ -83,6 +83,41 @@ CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE OF text, key, tags_csv ON fac
     VALUES ('delete', old.id, old.text, COALESCE(old.key,''), old.tags_csv);
     INSERT INTO facts_fts(rowid, text, key, tags_csv)
     VALUES (new.id, new.text, COALESCE(new.key,''), new.tags_csv);
+END;
+
+-- Semantic retrieval's half of the index. One row per embedded fact, keyed by
+-- `fact_id` so a fact cannot carry two vectors and be returned twice at two
+-- scores. `model` and `dim` are recorded because a model switch has to be
+-- detectable: two embedding spaces mixed in one dot product produce numbers
+-- that look fine and mean nothing. `text_sha` covers stores that carried
+-- vectors before the triggers below existed.
+CREATE TABLE IF NOT EXISTS fact_vectors (
+    fact_id    INTEGER PRIMARY KEY,
+    model      TEXT NOT NULL,
+    dim        INTEGER NOT NULL,
+    text_sha   TEXT NOT NULL,
+    vec        BLOB NOT NULL,
+    created_at REAL NOT NULL
+);
+
+-- These triggers invalidate, they never embed. SQLite cannot call the model,
+-- and a trigger that tried would put inference on the write path; a missing
+-- row is the signal `index_missing` looks for.
+--
+-- Scoped to `text` for the reason `facts_au` above is scoped to the indexed
+-- columns: recall bumps `use_count` on every fact it surfaces, and an
+-- unscoped AFTER UPDATE would throw away a vector on the most common write in
+-- the system and then pay to recompute it. Status changes are excluded for
+-- the same reason: `forget` is reversible and re-embedding is the expensive
+-- half, so a retired fact keeps the vector it already paid for.
+CREATE TRIGGER IF NOT EXISTS facts_vec_au AFTER UPDATE OF text ON facts BEGIN
+    DELETE FROM fact_vectors WHERE fact_id = old.id;
+END;
+
+-- Deletion, unlike retirement, is final. This is also what keeps `purge`
+-- correct without purge having to learn the table exists.
+CREATE TRIGGER IF NOT EXISTS facts_vec_ad AFTER DELETE ON facts BEGIN
+    DELETE FROM fact_vectors WHERE fact_id = old.id;
 END;
 
 -- The belief network. An edge says the child would not have been concluded
@@ -381,6 +416,7 @@ CREATE INDEX IF NOT EXISTS idx_entity_edges_src ON entity_edges(src_id);
 CREATE INDEX IF NOT EXISTS idx_entity_edges_dst ON entity_edges(dst_id);
 CREATE INDEX IF NOT EXISTS idx_fact_entities_entity ON fact_entities(entity_id);
 CREATE INDEX IF NOT EXISTS idx_entities_scope_status ON entities(scope, status);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
 """
 
 
