@@ -31,13 +31,19 @@ class ActivityLedger:
         git_head_before: str | None = None,
         started_at: float | None = None,
         external_id: str | None = None,
+        source: str | None = None,
     ) -> int:
+        """`source` says whether the row was watched as it ran (`hook`) or
+        reconstructed from history (`backfill`). Recorded rather than inferred,
+        because the repair that moves mis-dated rows onto their transcript's
+        clock has to know which rows it may touch."""
         with transaction(self.conn):
             cur = self.conn.execute(
                 "INSERT INTO sessions(agent, project_scope, cwd, git_branch,"
-                " git_head_before, started_at, external_id) VALUES (?,?,?,?,?,?,?)",
+                " git_head_before, started_at, external_id, source)"
+                " VALUES (?,?,?,?,?,?,?,?)",
                 (agent, project_scope, cwd, git_branch, git_head_before, started_at or now(),
-                 external_id),
+                 external_id, source),
             )
             commit(self.conn)
             return cur.lastrowid

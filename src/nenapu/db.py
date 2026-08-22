@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def default_db_path() -> Path:
@@ -223,7 +223,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at        REAL NOT NULL,
     ended_at          REAL,
     summary           TEXT,
-    external_id       TEXT  -- the transcript's own session id, for backfill idempotency
+    external_id       TEXT, -- the transcript's own session id, for backfill idempotency
+    source            TEXT   -- 'hook' if watched as it ran, 'backfill' if reconstructed
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_scope ON sessions(project_scope, started_at);
@@ -617,6 +618,14 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     "ingest_queue": [
         ("grade_source", "TEXT"),
+    ],
+    "sessions": [
+        # Whether the row was watched as it ran or reconstructed from history.
+        # `backfill --redate` used to infer this from `git_head_before`, which
+        # is also NULL for a live session that ran outside a git repo, so the
+        # repair moved live rows onto transcript timestamps. Rows written
+        # before this column existed carry NULL and fall back to the old rule.
+        ("source", "TEXT"),
     ],
 }
 

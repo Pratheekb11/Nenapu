@@ -36,7 +36,11 @@ from nenapu.activity import ActivityLedger
 from nenapu.backfill import _already_dated, redate_backfilled_sessions
 from nenapu.capture import open_session
 
-EPOCH = 1_700_000_000.0
+# The one timestamp every transcript below carries, and what a repaired row
+# must end up holding. The mis-dated stamp is deliberately a different year, so
+# "it moved" and "it moved to the right place" are not the same assertion.
+TRANSCRIPT_AT = 1_782_900_000.0  # 2026-07-01T10:00:00Z
+MIS_DATED_AT = 1_700_500_000.0   # the afternoon an earlier backfill ran
 
 
 @pytest.fixture
@@ -86,7 +90,7 @@ def _mis_dated(ledger, external_id: str, *, source: str | None,
     """A row stamped with the moment a backfill ran rather than the session."""
     row_id = ledger.start_session(
         agent="claude-code", project_scope="repo", cwd="/repo",
-        started_at=EPOCH + 500_000, external_id=external_id,
+        started_at=MIS_DATED_AT, external_id=external_id,
         git_head_before=git_head_before,
     )
     ledger.conn.execute("UPDATE sessions SET source = ? WHERE id = ?", (source, row_id))
@@ -123,7 +127,7 @@ def test_a_backfilled_row_is_repaired(ledger, transcripts):
     moved = redate_backfilled_sessions(ledger, _glob(transcripts))
 
     assert moved == 1
-    assert ledger.get_session(row_id)["started_at"] < EPOCH + 500_000
+    assert ledger.get_session(row_id)["started_at"] == TRANSCRIPT_AT
 
 
 def test_a_watched_row_outside_a_git_repo_is_left_alone(ledger, transcripts):
@@ -155,7 +159,7 @@ def test_a_row_written_before_the_column_existed_falls_back_to_git(ledger, trans
 
     assert moved == 1
     assert ledger.get_session(watched)["started_at"] == watched_before
-    assert ledger.get_session(reconstructed)["started_at"] < EPOCH + 500_000
+    assert ledger.get_session(reconstructed)["started_at"] == TRANSCRIPT_AT
 
 
 # ---------- D2: the repair path, tested directly ----------
@@ -194,19 +198,19 @@ def test_a_transcript_with_no_row_is_not_ingested(ledger, transcripts):
 def test_a_row_already_on_its_own_clock_is_left_alone():
     """The tolerance exists so a re-run is a no-op rather than a rewrite of the
     same value with a slightly different float."""
-    row = {"started_at": EPOCH, "ended_at": EPOCH + 60}
+    row = {"started_at": TRANSCRIPT_AT, "ended_at": TRANSCRIPT_AT + 60}
 
-    assert _already_dated(row, EPOCH + 0.5, EPOCH + 60.5)
-    assert not _already_dated(row, EPOCH + 5.0, EPOCH + 60.0)
+    assert _already_dated(row, TRANSCRIPT_AT + 0.5, TRANSCRIPT_AT + 60.5)
+    assert not _already_dated(row, TRANSCRIPT_AT + 5.0, TRANSCRIPT_AT + 60.0)
 
 
 def test_an_ended_at_the_transcript_cannot_say_is_not_invented(ledger):
     """`redate_session` leaves `ended_at` alone when there is nothing to put
     there, rather than stamping the row as finished now."""
     row_id = ledger.start_session(agent="claude-code", project_scope="repo",
-                                  started_at=EPOCH + 500_000, external_id="s-x")
+                                  started_at=MIS_DATED_AT, external_id="s-x")
 
-    ledger.redate_session(row_id, started_at=EPOCH)
+    ledger.redate_session(row_id, started_at=TRANSCRIPT_AT)
 
-    assert ledger.get_session(row_id)["started_at"] == EPOCH
+    assert ledger.get_session(row_id)["started_at"] == TRANSCRIPT_AT
     assert ledger.get_session(row_id)["ended_at"] is None

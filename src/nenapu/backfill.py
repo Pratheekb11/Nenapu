@@ -58,6 +58,7 @@ def backfill_transcript(ledger: ActivityLedger, path: str | Path, *, agent: str)
         git_branch=meta["git_branch"],
         started_at=started_at,
         external_id=session_id,
+        source="backfill",
     )
     for event in file_events_from(lines):
         ledger.record_file_event(
@@ -80,12 +81,14 @@ def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
     parser is fixed; these are the rows it already wrote, and the transcripts
     are still on disk, so the true times are recoverable rather than lost.
 
-    Only rows with no start of their own are touched. A session the
-    SessionStart hook recorded has `git_head_before`, written at the moment
-    the session actually began, which is a better answer than anything a
-    transcript can be read to say — and overwriting it would lose the one
-    field that cannot be recovered afterwards. Repairs only; a transcript
-    with no row yet is a job for a plain backfill.
+    Only reconstructed rows are touched. A session the SessionStart hook
+    recorded began at a moment something watched, which is a better answer
+    than anything a transcript can be read to say. `source` records which is
+    which; rows written before that column existed have no answer to give and
+    fall back to the rule this used to use on its own — `git_head_before` set
+    means the hook recorded it — which is right except for a live session that
+    ran outside a git repo, where there was no head to write down. Repairs
+    only; a transcript with no row yet is a job for a plain backfill.
 
     With `apply=False` it counts what it would move and writes nothing, which
     is what `--dry-run` promises.
@@ -97,7 +100,7 @@ def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
         if not session_id:
             continue
         row = ledger.get_session(session_id)
-        if row is None or row["git_head_before"] is not None:
+        if row is None or not _was_reconstructed(row):
             continue
         started_at, ended_at = session_span_from(lines)
         if started_at is None:
@@ -108,6 +111,18 @@ def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
             ledger.redate_session(row["id"], started_at=started_at, ended_at=ended_at)
         moved += 1
     return moved
+
+
+def _was_reconstructed(row: dict) -> bool:
+    """May this row be moved onto the clock its transcript carries?
+
+    Rows recorded since `sessions.source` exists say so themselves. Older rows
+    fall back to the heuristic that came first: a session the hook watched has
+    a `git_head_before` written at the moment it began.
+    """
+    if row.get("source"):
+        return row["source"] == "backfill"
+    return row["git_head_before"] is None
 
 
 def _already_dated(row: dict, started_at: float, ended_at: float | None) -> bool:

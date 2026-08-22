@@ -433,4 +433,8 @@ def open_session(
         git_branch=git_branch(cwd) if cwd else None,
         git_head_before=git_head(cwd) if cwd else None,
         external_id=external_id,
+        # Watched as it ran. `git_head_before` used to stand in for this, and
+        # it is NULL for a session outside a git repo, so a repair meant for
+        # reconstructed history moved live rows too.
+        source="hook",
     )
