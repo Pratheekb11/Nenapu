@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # pyproject.toml / uv.lock — the runtime and dev/lint dependency caps.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Action versions pinned in the workflows themselves (actions/checkout,
+  # astral-sh/setup-uv, ...).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

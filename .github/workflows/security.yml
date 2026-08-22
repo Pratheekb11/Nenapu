@@ -1,0 +1,44 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  secrets:
+    # Free for public repos; gitleaks/gitleaks-action needs a license only on
+    # private repos or paid orgs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  no-personal-files:
+    # The store (nenapu.db) and every agent-instruction/memory path an agent
+    # working in this repo could generate are gitignored so a normal `git
+    # add` cannot pick them up — this catches the case where one was force-
+    # added anyway. The pattern list mirrors .gitignore's "Agent instruction
+    # files" and "Caveman agent rule files" sections; keep the two in sync.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: no store, no memory, no agent-instruction file is tracked
+        run: |
+          tracked=$(git ls-files \
+            -- '*.db' '*.db-wal' '*.db-shm' \
+               'CLAUDE.md' 'claude.md' '.claude' \
+               'INSTRUCTIONS.md' 'instructions.md' \
+               'INSTRUCTION.md' 'instruction.md' \
+               '.cursor' '.windsurf' '.clinerules' '.opencode' \
+               'AGENTS.md' '.github/copilot-instructions.md' \
+               '.env' '.env.*')
+          if [ -n "$tracked" ]; then
+            echo "tracked files that must never be committed:"
+            echo "$tracked"
+            exit 1
+          fi

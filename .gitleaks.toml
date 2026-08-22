@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake secrets used as fixtures for nenapu's own redaction tests"
+paths = [
+  '''tests/test_observer\.py''',
+]

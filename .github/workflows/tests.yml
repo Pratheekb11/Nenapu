@@ -25,6 +25,18 @@ jobs:
       - run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
       - run: uv run --no-sync pytest -q
 
+  lint:
+    # F-only: real bugs (unused imports, undefined names), not a style
+    # rewrite. See the comment on [tool.ruff.lint] in pyproject.toml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked --extra lint --python 3.13
+      - run: uv run --no-sync ruff check .
+
   packaging:
     # The suite puts `src` on the path itself, so every test can pass while the
     # thing a user actually installs is broken — a missing entry point, a
