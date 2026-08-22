@@ -660,3 +660,59 @@ measured over a block that no session chose, and every graded session ran
 against the block as it was before the anchoring work. It is the number that
 work is meant to move, and it can only be judged by sessions that run
 against the new block.
+
+
+## `--dry-run` is enforced, not remembered, 2026-08-22
+
+Four defects were found by running commands against the real store rather
+than in review, and the last of them was a `backfill --redate --dry-run` that
+wrote anyway. It was tempting to read that as a `--redate` bug. It was not.
+The flag was a boolean that every write path had to remember to consult, and
+three more paths in `learn` alone had forgotten:
+
+- capture ran before `dry_run` was read at all, so a dry run wrote a
+  `sessions` row, its `file_events`, the git evidence and the entities built
+  from them, before the model call it was previewing had even been attempted;
+- `--no-infer` called `store_messages` with no dry-run consideration, writing
+  every turn of the transcript to disk;
+- `--detach` returned early into the queue, so a detached worker performed the
+  full extraction under the flag that promised nothing would happen.
+
+None of this was visible to the existing dry-run tests, because they all call
+`observe_transcript(apply=False)` directly and never go through the command.
+That is the shape of the failure worth remembering: the tests covered the path
+that honoured the flag, so the paths that ignored it were untested by
+construction.
+
+The behaviour fixes are the small half. The structural half is that the store
+is now opened *unable to write* when a command is a dry run: `deny_writes`
+installs a SQLite authorizer that refuses INSERT, UPDATE, DELETE and schema
+changes, so a forgotten guard raises instead of writing. Two details are load
+bearing. Writes to `sqlite_master` are exempt, because declaring a virtual
+table's schema is reported to the authorizer as an UPDATE of it, and denying
+that turns every FTS5 query into "vtable constructor failed" — a guard that
+has quietly become a read outage. And `allow_writes` installs a permissive
+callback rather than passing `None`, which Python 3.10 accepts and then
+ignores, leaving the connection refusing writes for the rest of its life.
+
+A dry run still creates the store file if it does not exist, because
+`db.connect` provisions the schema before any command logic runs. The
+guarantee is about data, not about the file.
+
+`tests/test_dry_run_contract.py` holds every command that declares the flag to
+it, and fails if a command declares `--dry-run` without being listed. The
+contract rots the first time someone adds a command and nobody remembers, so
+the test is what remembers.
+
+Two smaller repairs from the same pass, both cases where a stand-in was being
+read as the thing itself:
+
+- `sessions.source` records whether a row was watched as it ran or
+  reconstructed from history. `backfill --redate` used to infer that from
+  `git_head_before`, which is also NULL for a live session that ran outside a
+  git repo, so the repair moved live rows onto transcript timestamps. Rows
+  written before the column existed fall back to the old rule.
+- a claim with no `claimed_at` was released by nothing, because the reaping
+  filter required the timestamp it was missing. Nothing produces that row on
+  purpose, which is why it is handled: it can only come from something already
+  wrong, and what it leaves behind is the permanent strand.

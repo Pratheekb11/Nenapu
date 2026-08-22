@@ -182,6 +182,8 @@ nenapu where app/models.py   # which agent touched this file, and when
 nenapu project backend       # one repo: sessions, files, commits
 nenapu pending               # open loops: mentioned, never done
 nenapu backfill              # replay the transcripts already on disk
+nenapu backfill --dry-run    # what it would ingest, writing nothing
+nenapu backfill --redate     # repair rows an earlier backfill mis-dated
 ```
 
 `backfill` is the one to run first on a machine that has been in use for a
@@ -189,6 +191,18 @@ while: the ledger starts empty, and every transcript under
 `~/.claude/projects` is a session it can recover. It is a parse, not an
 extraction — no model call, no tokens — and running it again picks up only
 what has arrived since.
+
+`--redate` repairs rather than ingests. An earlier backfill stamped its rows
+with the moment it ran rather than the moment the session happened, so weeks
+of history read as one busy afternoon, and three things believed it: the
+retrieval gate's coverage measure, "where you left off", and the rollups. It
+is a separate flag because rewriting rows that already exist should be asked
+for, and it only touches rows the ledger records as reconstructed — a session
+watched as it ran already began at a moment something wrote down.
+
+`--dry-run` is a promise about the whole command, not about one code path: the
+store is opened unable to write, so a dry run that tried to write would fail
+loudly rather than write quietly.
 
 Deletion is why git is read at all. A file removed by `rm` is named in no tool
 call, and parsing shell strings for it is fragile enough to be worse than not
@@ -236,11 +250,33 @@ jobs rather than two concurrent 83-second model calls against one store:
 
 ```bash
 nenapu drain                 # work the queue, one worker at a time
+nenapu queue                 # what is waiting, held, or failed
+nenapu queue --release       # free a job whose worker never came back
 ```
+
+A worker killed mid-job — a machine asleep, a terminal closed, a session limit
+reached — leaves its claim behind, and nothing may re-queue a transcript that
+is still claimed. A later worker releases claims older than an hour when it
+takes the lock; `nenapu queue` is how to see one and how to free it without
+waiting, and it is also the only place a failed job says why it failed.
 
 A transcript is read once its size has held still for two minutes, and an
 agent whose Stop hook is installed is skipped — the unique index would absorb
 the duplicate facts, but not the 83 seconds spent producing them.
+
+Grading closes the loop on what was recalled:
+
+```bash
+nenapu grade <session> --success   # or --failure
+nenapu grade --replay              # read the whole backlog off disk
+nenapu grade --replay --limit 5    # in instalments: each session is a model call
+nenapu grade --replay s-a s-b      # exactly these, however old they are
+```
+
+An unbounded replay is what the command is for, but the backlog grows on its
+own as sessions run, so a bound matters: asking for the seven that had failed
+once queued fifty-two, an hour of model calls nobody asked for. `--limit`
+takes the newest first; naming sessions takes the ones you meant.
 
 ## Use
 
