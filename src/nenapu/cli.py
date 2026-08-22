@@ -937,6 +937,7 @@ def _sessions_with_pending_recalls(store, since_days: float | None) -> list[str]
 def replay_pending_sessions(
     store,
     *,
+    sessions: list[str] | None = None,
     since_days: float | None = None,
     limit: int | None = None,
     transcripts_root: Path | str | None = None,
@@ -959,6 +960,13 @@ def replay_pending_sessions(
     come first, since their transcripts describe how the store is being used
     now.
 
+    `sessions` names them outright, and replaces the backlog query rather than
+    filtering it. `limit` and `since_days` both bound by recency, which is the
+    wrong axis for "the seven that failed": the only way to reach seven
+    specific sessions was to queue everything newer than them. A named session
+    is queued whether or not it still has pending recalls, because naming it is
+    an instruction rather than a filter to be second-guessed.
+
     Returns the session ids queued. Spawning the worker is the caller's job:
     this function only decides what needs reading.
     """
@@ -971,8 +979,11 @@ def replay_pending_sessions(
     # replayed.
     on_disk = {path.stem: path for path in root.glob("*/*.jsonl")}
 
+    wanted = (list(dict.fromkeys(sessions)) if sessions
+              else _sessions_with_pending_recalls(store, since_days))
+
     queued: list[str] = []
-    for session_id in _sessions_with_pending_recalls(store, since_days):
+    for session_id in wanted:
         if limit is not None and len(queued) >= limit:
             break
         path = on_disk.get(session_id)
@@ -988,7 +999,8 @@ def replay_pending_sessions(
 @app.command("grade", rich_help_panel=OUTCOMES)
 @alias("outcome", OUTCOMES)
 def grade(
-    session_id: str = typer.Argument("", help="Session to grade in one call"),
+    session_ids: list[str] = typer.Argument(
+        None, help="Session to grade, or with --replay the sessions to replay"),
     success: bool = typer.Option(None, "--success/--failure"),
     replay: bool = typer.Option(False, "--replay",
                                 help="Grade the backlog from transcripts on disk"),
@@ -1000,14 +1012,21 @@ def grade(
 ) -> None:
     """Grade every memory a task used, in one call."""
     store, _ = _stores(db)
+    named = list(session_ids or [])
     if replay:
-        sessions = replay_pending_sessions(store, since_days=since or None,
+        sessions = replay_pending_sessions(store, sessions=named or None,
+                                           since_days=since or None,
                                            limit=limit or None, db=db)
         if sessions:
             _spawn_worker(db)
         console.print(f"queued {len(sessions)} session(s) for grading")
         return
 
+    # Only `--replay` takes a set. One verdict over several sessions is
+    # ambiguous, and guessing which one was meant is worse than asking.
+    if len(named) > 1:
+        raise typer.BadParameter("grade one session at a time, or use --replay")
+    session_id = named[0] if named else ""
     if not session_id or success is None:
         raise typer.BadParameter("give a session id with --success/--failure, or use --replay")
     graded = store.ledger.grade_session(
