@@ -188,14 +188,24 @@ def _grown(build, frame, budget: int):
     rows: the drawing can be taller than the column beside it, in which case
     the first few facts cost no height at all, and arithmetic that assumed
     otherwise left a quarter of the screen empty.
+
+    The first fact costs three rows — a heading, the fact, and the blank line
+    under it — so a screen with two rows to spare could not take one and stayed
+    visibly empty. The blank line is shed first when that happens, the same way
+    the ladder above sheds the hint line before the wordmark: spacing is the
+    cheapest thing on the screen to give up.
     """
     best = frame
     for count in range(1, 41):
-        candidate = build(count)
-        height = _height(console, candidate)
-        if height > budget:
+        candidate = None
+        for tight in (False, True):
+            attempt = build(count, tight)
+            if _height(console, attempt) <= budget:
+                candidate = attempt
+                break
+        if candidate is None:
             break
-        if height == _height(console, best) and count > 12:
+        if _height(console, candidate) == _height(console, best) and count > 12:
             break          # the store has run out of facts to show
         best = candidate
     return best
@@ -337,7 +347,8 @@ def _landing(store):
         except Exception:  # noqa: BLE001
             return 0
 
-    def side_by_side(scale: float, explainer: bool, recent: int, header: bool):
+    def side_by_side(scale: float, explainer: bool, recent: int, header: bool,
+                     tight: bool = False):
         text_width = cols - art_width(scale) - 4
         right = Table.grid()
         right.add_column(no_wrap=True)
@@ -348,7 +359,8 @@ def _landing(store):
             if learned is not None:
                 right.add_row("[bold]Lately[/]")
                 right.add_row(learned)
-                right.add_row("")
+                if not tight:
+                    right.add_row("")
         right.add_row(_commands_table())
         right.add_row("")
         right.add_row(hint)
@@ -359,13 +371,16 @@ def _landing(store):
         columns.add_row(dog(scale), right)
         return Group(*wordmark(console), Text(""), columns) if header else columns
 
-    def stacked(art: bool, commands: bool, recent: int = 0, hint_line: bool = True):
+    def stacked(art: bool, commands: bool, recent: int = 0, hint_line: bool = True,
+                tight: bool = False):
         parts = [panel(console, version=__version__, conn=conn, path=path or "",
                        backend=backend, rows=rows, art=art), Text("")]
         if recent and store is not None:
             learned = _recent(store, recent)
             if learned is not None:
-                parts += [Text.from_markup("[bold]Lately[/]"), learned, Text("")]
+                parts += [Text.from_markup("[bold]Lately[/]"), learned]
+                if not tight:
+                    parts.append(Text(""))
         if commands:
             parts += [_commands_table(), Text("")]
         return Group(*parts, hint) if hint_line else Group(*parts[:-1])
@@ -385,8 +400,9 @@ def _landing(store):
         for header in (True, False):
             frame = side_by_side(scale, False, 0, header)
             if _height(console, frame) <= rows - 2:
-                return _grown(lambda n: side_by_side(scale, False, n, header),
-                              frame, rows - 2)
+                return _grown(
+                    lambda n, tight: side_by_side(scale, False, n, header, tight),
+                    frame, rows - 2)
 
     # Stacked, for terminals too narrow to put anything beside anything else.
     # Same trick: measure the frame, then fill what is left with facts.
@@ -397,8 +413,10 @@ def _landing(store):
     for art, hint_line in ((True, True), (True, False), (False, True)):
         frame = stacked(art, True, hint_line=hint_line)
         if _height(console, frame) <= rows - 2:
-            return _grown(lambda n: stacked(art, True, n, hint_line=hint_line),
-                          frame, rows - 2)
+            return _grown(
+                lambda n, tight: stacked(art, True, n, hint_line=hint_line,
+                                         tight=tight),
+                frame, rows - 2)
     return _first_that_fits([stacked(False, True), stacked(False, False)], rows - 2)
 
 
