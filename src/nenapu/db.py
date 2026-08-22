@@ -441,6 +441,86 @@ def commit(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+# Actions that change what the store holds. Everything else — SELECT, READ,
+# PRAGMA, FUNCTION, TRANSACTION, SAVEPOINT — is a read or a no-op and is let
+# through, so a guarded connection is still fully usable for answering.
+_WRITE_ACTIONS = frozenset({
+    sqlite3.SQLITE_INSERT,
+    sqlite3.SQLITE_UPDATE,
+    sqlite3.SQLITE_DELETE,
+    sqlite3.SQLITE_ALTER_TABLE,
+    sqlite3.SQLITE_CREATE_INDEX,
+    sqlite3.SQLITE_CREATE_TABLE,
+    sqlite3.SQLITE_CREATE_TRIGGER,
+    sqlite3.SQLITE_CREATE_VIEW,
+    sqlite3.SQLITE_DROP_INDEX,
+    sqlite3.SQLITE_DROP_TABLE,
+    sqlite3.SQLITE_DROP_TRIGGER,
+    sqlite3.SQLITE_DROP_VIEW,
+    sqlite3.SQLITE_REINDEX,
+})
+
+# SQLite declares a virtual table's schema by what the authorizer reports as an
+# UPDATE of `sqlite_master`. Denying that breaks every FTS5 query with "vtable
+# constructor failed" — a guard that has quietly become a read outage. No
+# statement can write `sqlite_master` directly, so the exemption costs nothing.
+_SCHEMA_TABLE = "sqlite_master"
+
+
+def _refuse_writes(action: int, arg1, arg2, db_name, trigger) -> int:
+    if action in _WRITE_ACTIONS and arg1 != _SCHEMA_TABLE:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def deny_writes(conn: sqlite3.Connection) -> None:
+    """Refuse every statement on this connection that would change data.
+
+    `--dry-run` used to be a boolean each write path had to remember to
+    consult, and the paths that forgot were invisible until someone ran the
+    command against a real store: a `backfill --redate --dry-run` that wrote,
+    and three more in `learn` alone. Remembering does not scale. The
+    connection refuses instead, and a refused write raises
+    `sqlite3.DatabaseError` at prepare time rather than writing, which is the
+    loud failure a silent one deserves.
+
+    One write a dry run still performs, and it happens before this is
+    installed: `connect` creates and migrates the store if it does not exist.
+    The guarantee is about data, not about the file existing.
+    """
+    conn.set_authorizer(_refuse_writes)
+
+
+def _permit_everything(action: int, arg1, arg2, db_name, trigger) -> int:
+    return sqlite3.SQLITE_OK
+
+
+def allow_writes(conn: sqlite3.Connection) -> None:
+    """Lift the guard. The inverse of `deny_writes`, and safe if none is set.
+
+    A permissive callback rather than `set_authorizer(None)`: on Python 3.10
+    None is accepted and then ignored, so the old callback stays installed and
+    the connection keeps refusing writes for the rest of its life. Measured on
+    3.10.12, and this package supports 3.10. Only a connection that was guarded
+    ever carries a callback, so no ordinary connection pays for one.
+    """
+    conn.set_authorizer(_permit_everything)
+
+
+@contextlib.contextmanager
+def readonly(conn: sqlite3.Connection):
+    """Hold `deny_writes` for a block, and lift it even if the block raises.
+
+    A command that fails partway through a dry run must not leave the
+    connection refusing writes for whatever runs next in the same process.
+    """
+    deny_writes(conn)
+    try:
+        yield conn
+    finally:
+        allow_writes(conn)
+
+
 def _make_private(target: Path) -> None:
     """Create the store owner-only, and repair a store that predates this.
 
