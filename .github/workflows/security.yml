@@ -11,7 +11,7 @@ jobs:
     # private repos or paid orgs.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
@@ -26,7 +26,7 @@ jobs:
     # files" and "Caveman agent rule files" sections; keep the two in sync.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: no store, no memory, no agent-instruction file is tracked
         run: |
           tracked=$(git ls-files \

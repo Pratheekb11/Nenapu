@@ -15,7 +15,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -30,7 +30,7 @@ jobs:
     # rewrite. See the comment on [tool.ruff.lint] in pyproject.toml.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -43,7 +43,7 @@ jobs:
     # module left out of the wheel. This job installs it the way they do.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
