@@ -146,9 +146,6 @@ def test_task_outcome_grades_a_session(tmp_path, monkeypatch):
 # budget test above is the guard on both of these.
 # ==========================================================================
 
-import pytest
-
-
 
 def _tool(m, name):
     return next(t for t in _tools(m) if t.name == name)

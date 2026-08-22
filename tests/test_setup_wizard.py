@@ -7,7 +7,6 @@ duplicating, no leaving a broken JSON file behind.
 
 import json
 
-import pytest
 
 from nenapu.setup_wizard import (
     HOOK_MARKER,

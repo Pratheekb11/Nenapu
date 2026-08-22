@@ -26,7 +26,7 @@ import subprocess
 import pytest
 
 from nenapu import connect
-from nenapu.models import Fact, Kind, Origin
+from nenapu.models import Fact, Kind
 from nenapu.store import Store
 
 

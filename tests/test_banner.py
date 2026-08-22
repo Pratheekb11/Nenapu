@@ -1,7 +1,5 @@
 """The greeting must be a greeting, not a recurring interruption."""
 
-import pytest
-
 from nenapu import connect
 from nenapu.banner import FIRST_RUN_HELP, HERO, HERO_ASCII, STAMP, should_greet
 

@@ -12,15 +12,12 @@ The rules that make this different from a notes file:
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import math
 import os
-import random
 import re
 import sqlite3
 import subprocess
-import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence

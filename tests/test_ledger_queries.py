@@ -20,7 +20,6 @@ the real Typer wiring — panel placement, option parsing, exit codes — not
 just the underlying query functions.
 """
 
-import json
 import os
 import subprocess
 import sys

@@ -135,7 +135,7 @@ def test_journal_records_every_action(store):
 
 
 def test_enums_render_as_their_values(store):
-    from nenapu.models import Kind, VerifyStatus
+    from nenapu.models import Kind
     assert f"{VerifyStatus.FAIL:>6}" == "  fail"
     assert str(Kind.USER) == "user"
     fact, _ = store.write(Fact(text="x", kind=Kind.USER))

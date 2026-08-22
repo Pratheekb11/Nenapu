@@ -19,7 +19,7 @@ from .audit import audit as run_audit
 from .db import deny_writes
 from .distill import distill as run_distill
 from .export import render, write_file
-from .models import Fact, Kind, Skill, Status
+from .models import Fact, Skill, Status
 from .retrieval_report import MIN_DAYS_OF_DATA
 from .store import DAY, effective_confidence, now
 from .verify import run_check, apply_result, verify_scope

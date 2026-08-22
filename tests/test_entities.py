@@ -62,12 +62,11 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 import pytest
 
 from nenapu import connect
-from nenapu.models import Fact, Kind, Origin, Status, now
+from nenapu.models import Fact, Kind, Status, now
 from nenapu.store import Store
 
 
@@ -520,7 +519,6 @@ def test_a_live_session_builds_entities_as_it_lands(store, tmp_path, monkeypatch
     offline rebuild."""
     from nenapu.activity import ActivityLedger
     from nenapu.capture import capture_session
-    from nenapu.entities import EntityGraph
 
     transcript = tmp_path / "t.jsonl"
     transcript.write_text("\n".join([

@@ -19,8 +19,6 @@ requirement task 3 builds on — is unanswerable, because there is nowhere to
 put the answer.
 """
 
-import os
-
 import pytest
 
 from nenapu import connect

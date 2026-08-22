@@ -8,7 +8,6 @@ looked fine on twenty facts and did not return on a few thousand.
 import random
 import time
 
-import pytest
 
 from nenapu import connect
 from nenapu.distill import _similarity, dedupe

@@ -9,7 +9,6 @@ judgement, just a fact that either still holds or does not.
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 from dataclasses import dataclass, field
 

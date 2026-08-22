@@ -9,7 +9,6 @@ import os
 import subprocess
 import sys
 
-import pytest
 
 from nenapu import connect
 from nenapu.banner import mark_walked, should_walk

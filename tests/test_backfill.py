@@ -23,7 +23,6 @@ module, proposed here as the contract for Task 5's implementation.
 """
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
