@@ -94,16 +94,9 @@ def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
     is what `--dry-run` promises.
     """
     moved = 0
-    for path in transcripts_matching(glob_pattern):
-        lines = read_lines(path)
-        session_id = session_meta_from(lines)["session_id"]
-        if not session_id:
-            continue
+    for session_id, (started_at, ended_at) in _spans_by_session(glob_pattern).items():
         row = ledger.get_session(session_id)
         if row is None or not _was_reconstructed(row):
-            continue
-        started_at, ended_at = session_span_from(lines)
-        if started_at is None:
             continue
         if _already_dated(row, started_at, ended_at):
             continue
@@ -111,6 +104,43 @@ def redate_backfilled_sessions(ledger: ActivityLedger, glob_pattern: str, *,
             ledger.redate_session(row["id"], started_at=started_at, ended_at=ended_at)
         moved += 1
     return moved
+
+
+def _spans_by_session(glob_pattern: str) -> dict[str, tuple[float, float | None]]:
+    """The span each session ran over, across every transcript that claims it.
+
+    Grouped rather than read file by file, because several transcripts can
+    carry one session id: a resumed session writes a new file that still names
+    the session it continues. Read in turn, each file rewrote the row with its
+    own span, so the row landed on whichever the glob yielded last and the
+    repair reported the same rows moved on every run. Found by running it
+    against a copy of the real store, where three transcripts claimed one row.
+
+    Earliest start and latest end, because those files are one session's
+    history and it ran from the first thing it said to the last.
+    """
+    spans: dict[str, tuple[float, float | None]] = {}
+    for path in transcripts_matching(glob_pattern):
+        lines = read_lines(path)
+        session_id = session_meta_from(lines)["session_id"]
+        if not session_id:
+            continue
+        started_at, ended_at = session_span_from(lines)
+        if started_at is None:
+            continue
+        known = spans.get(session_id)
+        if known is None:
+            spans[session_id] = (started_at, ended_at)
+            continue
+        first, last = known
+        spans[session_id] = (
+            min(first, started_at),
+            None if last is None and ended_at is None else max(
+                last if last is not None else ended_at,
+                ended_at if ended_at is not None else last,
+            ),
+        )
+    return spans
 
 
 def _was_reconstructed(row: dict) -> bool:
