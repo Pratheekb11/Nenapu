@@ -421,15 +421,22 @@ def messages_from_transcript(path: Path, *, max_messages: int = 200) -> list[tup
 
 def store_messages(
     conn: sqlite3.Connection, session_id: str | None, pairs: list[tuple[str, str]],
+    *, apply: bool = True,
 ) -> int:
     """Persist verbatim turns, gated by `NENAPU_STORE_MESSAGES`.
 
     The gate lives here rather than at each call site so it cannot be
     forgotten by a caller — a store must opt in explicitly before any raw
     conversation lands on disk, `--no-infer` alone is not enough.
+
+    `apply=False` answers the same question without writing, the way
+    `observe_transcript` and `run_audit` already do: the count is what a real
+    run would store, so a dry run reports the same number it would have.
     """
     if not os.environ.get("NENAPU_STORE_MESSAGES"):
         return 0
+    if not apply:
+        return len(pairs)
     with transaction(conn):
         for seq, (role, text) in enumerate(pairs):
             conn.execute(

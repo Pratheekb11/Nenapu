@@ -1530,11 +1530,14 @@ def learn(
         store, _ = (open_store(db or os.environ.get("NENAPU_DB")) if from_stdin
                     else _stores(db))
         pairs = messages_from_transcript(Path(path))
-        stored = store_messages(store.conn, session_id, pairs)
+        # `--no-infer` skips the model, not the flag that promises nothing
+        # happens: this branch used to write regardless of `--dry-run`.
+        stored = store_messages(store.conn, session_id, pairs, apply=not dry_run)
         if from_stdin:
             raise typer.Exit(0)
         if stored:
-            console.print(f"{stored} message(s) stored verbatim")
+            verb = "would be stored" if dry_run else "stored"
+            console.print(f"{stored} message(s) {verb} verbatim")
         else:
             console.print(
                 "[dim]nothing stored — set NENAPU_STORE_MESSAGES=1 to enable[/]"
