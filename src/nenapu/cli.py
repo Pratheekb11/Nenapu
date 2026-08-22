@@ -1506,6 +1506,15 @@ def learn(
         raise typer.BadParameter("no transcript path (pass one, or --stdin from a hook)")
 
     if detach:
+        # Refused rather than resolved, and refused before anything is queued.
+        # One flag promises nothing happens and the other hands the work to a
+        # process that applies everything, so honouring both silently bought a
+        # full extraction under the flag that said it would not.
+        if dry_run:
+            raise typer.BadParameter(
+                "--dry-run and --detach contradict each other: the detached "
+                "worker applies everything. Drop one."
+            )
         # Extraction is a model call over an entire session — 83s against real
         # transcripts, and hooks are killed at their timeout. The hook queues
         # the work and a detached worker does all of it: capture included, so
