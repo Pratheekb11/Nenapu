@@ -134,7 +134,11 @@ def test_an_unrelated_fact_scores_zero_semantically(store, monkeypatch):
     store.write(Fact(text=ANSWER))
     other, _ = store.write(Fact(text="database migrations run on deploy"))
 
-    results = store.search("database", log_recall=False, mark_used=False)
+    # QUERY, not a bare word: the fixture only guarantees that a fact outside
+    # `near` is orthogonal to the query *axis*, which is the vector QUERY maps
+    # to. Any other query lands on the same plane as the unrelated facts and
+    # is not orthogonal to them.
+    results = store.search(QUERY, log_recall=False, mark_used=False)
 
     why = next((w for f, _s, w in results if f.id == other.id), None)
     assert why is not None
