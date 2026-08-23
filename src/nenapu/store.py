@@ -795,6 +795,18 @@ class Store:
             args.extend(scopes)
         return [row_to_fact(r) for r in self.conn.execute(sql, args)]
 
+    def query_terms(self, query: str) -> str:
+        """The query reduced to terms this store already holds.
+
+        For the recall ledger, which records what was searched without
+        recording what was typed. Planning drops any word the store does not
+        contain, so a prompt carrying a secret cannot write the secret here --
+        there is nothing for it to match. The store gates verbatim
+        conversation behind an opt-in table, and a per-prompt hook writing
+        literal text into `recalls` would route around that boundary.
+        """
+        return " ".join(sorted(self._plan_query(query).words()))
+
     def _semantic_pool(
         self,
         query_vec: Sequence[float],

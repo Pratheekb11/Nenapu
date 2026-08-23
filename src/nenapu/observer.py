@@ -33,7 +33,7 @@ import re
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from .db import commit, transaction
 from .distill import _similarity
@@ -76,6 +76,13 @@ MAX_CHANGED = 8
 # against the live store, where the block came to 841 tokens on 2026-08-22
 # while the gate reported 84% of injected facts unused.
 INJECTION_TOKEN_BUDGET = 700
+
+# The per-prompt block. Smaller than the session block by design: that one is
+# paid once, this one is paid on every turn the user takes. It answers one
+# question rather than orienting a whole session, so it needs less room.
+PROMPT_TOKEN_BUDGET = 250
+MAX_PROMPT_INJECTED = 4
+PROMPT_PRIORITY = ("prompt",)
 
 # Sections in the order they are paid for, which is not the order they are
 # printed in. A correction the user has repeated is the most actionable line
@@ -1071,7 +1078,8 @@ def _truncate_to(line: str, tokens: int) -> str:
     return line[:keep].rstrip() + _TRUNCATION_MARK
 
 
-def _fit(sections: dict[str, _Section], spent: int, budget: int) -> dict[str, _Section]:
+def _fit(sections: dict[str, _Section], spent: int, budget: int,
+         priority: Sequence[str] = INJECTION_PRIORITY) -> dict[str, _Section]:
     """Spend the budget across the sections, most valuable first.
 
     A section whose heading will not fit is dropped whole: a heading with
@@ -1081,7 +1089,7 @@ def _fit(sections: dict[str, _Section], spent: int, budget: int) -> dict[str, _S
     nothing, which is the failure every guard in this path exists to avoid.
     """
     kept: dict[str, _Section] = {}
-    for key in INJECTION_PRIORITY:
+    for key in priority:
         section = sections.get(key)
         if not section:
             continue
@@ -1254,6 +1262,86 @@ def recall_context(
                               session_id=session_id, query="")
         store.mark_used([fact.id for fact in injected])
     return "\n".join(lines).strip()
+
+
+def prompt_context(
+    store: Store, prompt: str | None, *,
+    scope: str | None = None, session_id: str | None = None,
+    cwd: str | None = None,
+) -> str:
+    """Memory chosen for the prompt the user just typed, as plain text.
+
+    `recall_context` runs before any user text exists, so its relevance comes
+    from what happened before -- recent files, the branch, the directory. This
+    is the half that can answer what is being asked right now.
+
+    Never raises. It runs inside a hook on every turn, and a memory layer that
+    can end a session is worse than one that occasionally says nothing.
+    """
+    try:
+        return _prompt_context(store, prompt, scope=scope, session_id=session_id)
+    except Exception:
+        return ""
+
+
+def _prompt_context(store: Store, prompt: str | None, *, scope, session_id) -> str:
+    if not prompt or not prompt.strip():
+        return ""
+
+    scopes = ["global", scope] if scope else None
+    hits = store.search(
+        prompt,
+        scope=scopes,
+        limit=MAX_PROMPT_INJECTED * 3,
+        min_confidence=MIN_INJECTED_CONFIDENCE,
+        mark_used=False,   # `usage` is a ranking term; bumping it every turn
+        log_recall=False,  # would inflate whatever the ranker already likes
+        session_id=session_id,
+    )
+    # A prompt that planned to nothing is not a query. Letting the recency
+    # fallback answer it would file arbitrary recent facts as query recalls and
+    # poison the population `nenapu retrieval` reads.
+    hits = [hit for hit in hits if not hit[2].get("fallback")]
+    if not hits:
+        return ""
+
+    # Anything already injected in this session is already in the model's
+    # context, whether it came from session start or from an earlier prompt.
+    seen = _recalled_in_session(store, session_id)
+    chosen = _distinct([fact for fact, _s, _w in hits if fact.id not in seen])
+    chosen = chosen[:MAX_PROMPT_INJECTED]
+    if not chosen:
+        return ""
+
+    header = "# Memory (nenapu)"
+    sections = {"prompt": _Section(
+        "prompt",
+        ["Relevant memory for this request:"] + [f"- {f.text}" for f in chosen],
+        chosen,
+    )}
+    kept = _fit(sections, _token_estimate(header) + 2, PROMPT_TOKEN_BUDGET,
+                PROMPT_PRIORITY)
+    section = kept.get("prompt")
+    if not section:
+        return ""
+
+    if session_id:
+        # Logged with the planned terms, never the prompt. `retrieval_report`
+        # splits its populations on `query != ''`, so these are also the rows
+        # that finally give the query population something to measure.
+        store.ledger.log_many(
+            [(fact, 0.0, {}) for fact in section.facts],
+            session_id=session_id,
+            query=store.query_terms(prompt),
+        )
+    return "\n".join([header, ""] + section.lines).strip()
+
+
+def _recalled_in_session(store: Store, session_id: str | None) -> set[int]:
+    if not session_id:
+        return set()
+    return {row["fact_id"] for row in store.conn.execute(
+        "SELECT DISTINCT fact_id FROM recalls WHERE session_id = ?", (session_id,))}
 
 
 def _correction_line(fact: Fact) -> str:
