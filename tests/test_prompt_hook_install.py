@@ -26,6 +26,9 @@ Assumed seam, proposed by the plan and not yet in the codebase::
 """
 
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -135,3 +138,34 @@ def test_installing_twice_changes_nothing_the_second_time(tmp_path, prompt_hook)
     assert ok
     assert path.read_text() == first
     assert "already installed" in message
+
+
+# --- telling the user where they stand ---------------------------------------
+
+
+def test_doctor_reports_whether_the_model_is_warm(tmp_path):
+    """Someone who turns the hook on needs to know this before their first
+    prompt does. Every read path refuses to download, so an uncached model
+    means the semantic leg is silently off rather than slow."""
+    out = subprocess.run(
+        [sys.executable, "-m", "nenapu.cli", "doctor", "--db", str(tmp_path / "s.db")],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": os.path.abspath("src"),
+             "NENAPU_NO_BANNER": "1"},
+    )
+
+    assert out.returncode == 0
+    assert "embedding" in out.stdout.lower()
+
+
+def test_doctor_survives_the_extra_being_absent(tmp_path):
+    out = subprocess.run(
+        [sys.executable, "-m", "nenapu.cli", "doctor", "--db", str(tmp_path / "s.db")],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": os.path.abspath("src"),
+             "NENAPU_NO_BANNER": "1", "NENAPU_EMBEDDINGS": "off"},
+    )
+
+    assert out.returncode == 0
+    assert "embedding" in out.stdout.lower()
+    assert "Traceback" not in out.stderr
