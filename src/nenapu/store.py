@@ -61,6 +61,30 @@ CONFIDENCE_FLOOR = 0.05
 # belief layer still filters and warns after ranking.
 SEARCH_WEIGHTS = {"lexical": 0.45, "confidence": 0.35, "usage": 0.1, "proximity": 0.10}
 
+# The profile for when there *is* a semantic leg. `SEARCH_WEIGHTS` above is not
+# replaced: it is what a query gets when there is nothing to embed with, which
+# is what it always described, and it is what runs on every push since the
+# optional dependency is not installed in CI.
+#
+# Lexical gives up ground to semantic rather than confidence giving it up.
+# Believability is the thing this store has that a search engine does not, and
+# a blend that discounted it to make room for embeddings would be trading away
+# the differentiator to buy a commodity.
+#
+# Confidence stays an additive term rather than a multiplicative gate. A gate
+# would suppress decayed and disputed facts harder and may well be the better
+# design, but there is no evidence for that here yet: 35 graded query recalls,
+# three of them bad. Additive is also what the belief layer's own filters
+# assume, in that a fact may surface on an overwhelming match despite weak
+# standing and then arrive carrying its warning, rather than not arriving.
+HYBRID_WEIGHTS = {
+    "lexical": 0.30,
+    "semantic": 0.25,
+    "confidence": 0.30,
+    "entity": 0.10,
+    "usage": 0.05,
+}
+
 # Write contention: retry with jittered backoff rather than surfacing a lock
 # error to a user who only asked to remember something.
 LOCK_RETRIES = 6
@@ -866,9 +890,11 @@ class Store:
         # descending similarity so that candidates which tie on every other
         # term keep the order the embedding put them in.
         semantic_scores: dict[int, float] = {}
+        mode = "lexical"
         if semantic and plan.is_search and not fallback:
             raw = embeddings.embed_query(query)
             if raw:
+                mode = "hybrid"
                 # Stored vectors are unit-normalised at pack time, so the query
                 # has to be too or the dot product is not a cosine.
                 unit = embeddings.unpack(embeddings.pack(raw))
@@ -916,11 +942,19 @@ class Store:
             near_score = proximity.get(fact.id, 0.0)
             entity_score = entity_boost.get(fact.id, 0.0)
             anchor = max(near_score, entity_score)
+            sem = semantic_scores.get(fact.id, 0.0)
+            # One loop, two profiles. The anchor slot is named `proximity` in
+            # the degraded table and `entity` in the hybrid one because the
+            # query anchor did not exist when the first was written; it is the
+            # same slot and the same meaning either way.
+            weights = HYBRID_WEIGHTS if mode == "hybrid" else SEARCH_WEIGHTS
+            anchor_weight = weights.get("entity", weights.get("proximity", 0.0))
             score = (
-                SEARCH_WEIGHTS["lexical"] * lex
-                + SEARCH_WEIGHTS["confidence"] * conf
-                + SEARCH_WEIGHTS["usage"] * usage
-                + SEARCH_WEIGHTS["proximity"] * anchor
+                weights["lexical"] * lex
+                + weights.get("semantic", 0.0) * sem
+                + weights["confidence"] * conf
+                + weights["usage"] * usage
+                + anchor_weight * anchor
             )
             if conf < min_confidence:
                 continue
@@ -933,8 +967,9 @@ class Store:
                         "confidence": round(conf, 3),
                         "usage": round(usage, 3),
                         "proximity": round(near_score, 3),
-                        "semantic": round(semantic_scores.get(fact.id, 0.0), 3),
+                        "semantic": round(sem, 3),
                         "entity": round(entity_score, 3),
+                        "mode": mode,
                         "key_match": candidate.key_match,
                         "tag_match": candidate.tag_match,
                         "fallback": fallback,
