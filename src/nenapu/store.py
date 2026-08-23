@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import math
+from statistics import median
 import os
 import re
 import sqlite3
@@ -77,6 +78,38 @@ SEARCH_WEIGHTS = {"lexical": 0.45, "confidence": 0.35, "usage": 0.1, "proximity"
 # three of them bad. Additive is also what the belief layer's own filters
 # assume, in that a fact may surface on an overwhelming match despite weak
 # standing and then arrive carrying its warning, rather than not arriving.
+# How close a fact must be to enter the pool on the semantic leg alone.
+#
+# Calibrated against this store rather than picked. With bge-small, unrelated
+# English still scores about 0.5 -- the model has a high floor -- so measured
+# pairs run 0.46 to 0.51 for unrelated and 0.69 to 0.73 for genuinely related,
+# and 0.60 sits in the gap with roughly 0.09 of margin on each side.
+#
+# Without it, `heapq.nlargest` hands back its top N however bad they are, and a
+# query the store cannot answer returns its least unrelated facts looking like
+# hits. That is the guarantee `QueryPlan.is_search` exists to keep: a query for
+# something the store does not hold must answer with nothing, which is a
+# different thing from a query for nothing at all.
+SEMANTIC_FLOOR = 0.60
+
+# How far above the store's background similarity a hit must stand.
+#
+# The absolute floor above is weak on a large store: measured over 506 facts,
+# nonsense still peaks at 0.610 while a real query peaks at 0.693. What
+# actually separates them is the distance from the median similarity for that
+# same query -- 0.145 and 0.157 for real queries, 0.101 for nonsense, and
+# roughly zero when every fact is equally near.
+#
+# This is document frequency wearing different clothes. A term in most of the
+# store narrows nothing; neither does a query the whole store is equally close
+# to. In both cases the signal is not present, so the leg should not vote.
+SEMANTIC_BACKGROUND_MARGIN = 0.12
+
+# Below this many scored facts a median is noise rather than a background, so
+# the rule above stands down and the absolute floor decides alone. The same
+# guard `COMMON_TERM_MIN_FACTS` gives the query planner.
+SEMANTIC_BACKGROUND_MIN = 10
+
 HYBRID_WEIGHTS = {
     "lexical": 0.30,
     "semantic": 0.25,
@@ -814,6 +847,7 @@ class Store:
         statuses: Sequence[str],
         scope: str | Sequence[str] | None,
         pool: int,
+        floor: float,
     ) -> list[tuple[Fact, float]]:
         """Facts nearest the query in embedding space, best first.
 
@@ -853,6 +887,16 @@ class Store:
                 continue  # a vector from another model's space says nothing here
             scored.append((max(0.0, embeddings.dot(query_vec, vec)), row))
 
+        # Two cutoffs, because one is not enough. The absolute floor rejects a
+        # query with no neighbours at all; the background rule rejects a query
+        # every fact is equally near, where the top score can look respectable
+        # and still mean nothing.
+        cutoff = floor
+        if len(scored) >= SEMANTIC_BACKGROUND_MIN:
+            background = median(similarity for similarity, _row in scored)
+            cutoff = max(cutoff, background + SEMANTIC_BACKGROUND_MARGIN)
+        scored = [pair for pair in scored if pair[0] >= cutoff]
+
         best = heapq.nlargest(pool, scored, key=lambda pair: pair[0])
         return [(row_to_fact(row), score) for score, row in best]
 
@@ -869,6 +913,7 @@ class Store:
         log_recall: bool = True,
         near: Sequence[str] | None = None,
         semantic: bool = True,
+        semantic_threshold: float | None = None,
     ) -> list[tuple[Fact, float, dict]]:
         """Rank by lexical match *and* current believability.
 
@@ -903,7 +948,11 @@ class Store:
         # term keep the order the embedding put them in.
         semantic_scores: dict[int, float] = {}
         mode = "lexical"
-        if semantic and plan.is_search and not fallback:
+        # A quoted phrase is an explicit request to be literal. Two words next
+        # to each other are a different claim from the same two words in a
+        # paragraph, and offering what the phrase merely resembles answers a
+        # question the caller deliberately did not ask.
+        if semantic and plan.is_search and not fallback and not plan.phrases:
             raw = embeddings.embed_query(query)
             if raw:
                 mode = "hybrid"
@@ -912,7 +961,9 @@ class Store:
                 unit = embeddings.unpack(embeddings.pack(raw))
                 already = {c.fact.id for c in candidates}
                 for fact, score in self._semantic_pool(
-                    unit, statuses=statuses, scope=scope, pool=limit * 5
+                    unit, statuses=statuses, scope=scope, pool=limit * 5,
+                    floor=SEMANTIC_FLOOR if semantic_threshold is None
+                    else semantic_threshold,
                 ):
                     semantic_scores[fact.id] = score
                     if fact.id not in already:
