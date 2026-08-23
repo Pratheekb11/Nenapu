@@ -262,6 +262,33 @@ def test_the_query_deadline_is_honoured(monkeypatch):
     assert elapsed < 1.0
 
 
+def test_the_deadline_covers_loading_the_model_too(monkeypatch):
+    """Loading is the expensive part, so guarding only inference guards the
+    cheap half.
+
+    Measured on the live store with the model warm: the whole prompt hook runs
+    at 1167ms p50 against 160ms with the leg off, so roughly a second of it is
+    the ONNX session load -- and a fresh CLI process pays that on every single
+    prompt, with nothing to amortise it the way the long-lived MCP server does.
+    A machine slower than this one would sit there unbounded.
+    """
+    def slow_load():
+        time.sleep(2.0)
+        return _FakeEmbedder()
+
+    monkeypatch.setattr(embeddings, "_load_backend", slow_load)
+    monkeypatch.setenv("NENAPU_EMBED_DEADLINE_MS", "50")
+    embeddings.reset_cache()
+
+    started = time.time()
+    out = embeddings.embed_query("a query on a machine that loads slowly")
+    elapsed = time.time() - started
+
+    embeddings.reset_cache()
+    assert out is None
+    assert elapsed < 1.0
+
+
 def test_a_query_within_the_deadline_still_returns(monkeypatch, fake):
     monkeypatch.setenv("NENAPU_EMBED_DEADLINE_MS", "5000")
 
