@@ -84,14 +84,19 @@ def test_the_block_answers_the_prompt(store):
 def test_global_and_project_facts_are_both_in_reach(store):
     """Two-tier by construction, the same as the session-start block: how the
     user works travels with them, what a repo does stays in the repo."""
-    store.write(Fact(text="the billing service stores rows in postgres", scope=SCOPE))
-    store.write(Fact(text="always name the database in billing migrations",
+    store.write(Fact(text="the billing service runs on postgres", scope=SCOPE))
+    store.write(Fact(text="always mention the billing service in commit messages",
                      kind=Kind.FEEDBACK, origin=Origin.USER_STATED, scope="global"))
 
-    block = prompt_context(store, PROMPT, scope=SCOPE, session_id="s-1")
+    # Both facts carry both of the query's rare terms on purpose. The planner
+    # requires the two rarest present terms (`MAX_REQUIRED_TERMS`), so fixtures
+    # that split them between two facts would match neither, and the test would
+    # be measuring the planner rather than the scoping it is about.
+    block = prompt_context(store, "tell me about the billing service",
+                           scope=SCOPE, session_id="s-1")
 
     assert "postgres" in block
-    assert "migrations" in block
+    assert "commit messages" in block
 
 
 def test_another_projects_fact_never_appears(store):
