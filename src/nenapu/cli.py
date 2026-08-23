@@ -1760,7 +1760,8 @@ def learn(
     console.print(f"\n{len(learned)} fact(s) {'would be ' if dry_run else ''}remembered")
 
 
-def _setup_walkthrough(console_out, *, yes: bool = False) -> None:
+def _setup_walkthrough(console_out, *, yes: bool = False,
+                       prompt_hook: bool = False) -> None:
     """Wire Nenapu into whatever agent is actually on this machine.
 
     Memory an agent has to *ask* for is memory it will forget to ask for. So
@@ -1803,8 +1804,12 @@ def _setup_walkthrough(console_out, *, yes: bool = False) -> None:
             default=True,
         ))
         if agreed:
-            ok, detail = install_hooks()
+            ok, detail = install_hooks(prompt_hook=prompt_hook)
             console_out.print(f"    {'[green]✓[/]' if ok else '[red]✗[/]'} hooks — {detail}")
+            if prompt_hook:
+                console_out.print("    [dim]per-prompt memory on; run `nenapu index"
+                                  " --warm` once so the first prompt is not the one"
+                                  " that downloads the model[/]")
             ok, detail = wire_claude_code()
             console_out.print(f"    {'[green]✓[/]' if ok else '[dim]·[/]'} tools — {detail}"
                               "  [dim](optional; the hooks do the work)[/]")
@@ -1893,6 +1898,9 @@ def init(
     yes: bool = typer.Option(False, "--yes", help="Accept the detected defaults"),
     watch: bool = typer.Option(False, "--watch",
                                help="Also install the background watcher unit"),
+    prompt_hook: bool = typer.Option(
+        False, "--prompt-hook",
+        help="Also inject memory for each prompt (adds about a second per turn)"),
     db: str = DB_OPT,
 ) -> None:
     """Set Nenapu up as a layer over the agent you already use."""
@@ -1905,7 +1913,7 @@ def init(
         pass
 
     _big_panel(console, db, store=store)
-    _setup_walkthrough(console, yes=yes)
+    _setup_walkthrough(console, yes=yes, prompt_hook=prompt_hook)
     if watch:
         _install_watch_unit(console, yes=yes)
     _usage_guide(console)
@@ -2260,6 +2268,25 @@ def doctor(
     console.print(f"store    : {path}")
     console.print(f"backend  : {'[green]' + detail + '[/]' if ok else '[yellow]' + detail + '[/]'}")
     console.print("[dim]core loop (decay, checks, cascade, grading) needs no model at all[/]")
+
+    # Separate from the backend above: that one answers audits, this one
+    # answers queries. Reported because every read path refuses to download, so
+    # an uncached model is not a slow semantic leg, it is a silent absent one.
+    from . import embeddings
+
+    usable, why = embeddings.available()
+    done, total = embeddings.coverage(store)
+    if usable:
+        console.print(f"embedding: [green]{embeddings.MODEL_NAME}[/]"
+                      f"  {done}/{total} facts indexed")
+        if done < total:
+            console.print("[dim]run `nenapu index --backfill` so the semantic leg"
+                          " can see the rest[/]")
+    else:
+        console.print(f"embedding: [yellow]off[/] — {why}")
+        console.print("[dim]retrieval still works on text and belief;"
+                      " `pip install nenapu[embeddings]` then `nenapu index --warm`"
+                      " adds meaning[/]")
 
     if not calibrate_backend:
         if ok:

@@ -108,7 +108,7 @@ CLIENT_CONFIGS = {
 HOOK_MARKER = "nenapu"
 
 
-def hook_config() -> dict:
+def hook_config(prompt_hook: bool = False) -> dict:
     """SessionStart surfaces memory; Stop extracts it.
 
     This is the only place Nenapu sees a conversation it was not explicitly
@@ -122,7 +122,7 @@ def hook_config() -> dict:
     layer ends up looking like it works while learning nothing. So the hook
     hands the work to a detached child and returns immediately.
     """
-    return {
+    config = {
         "SessionStart": [{
             "hooks": [{
                 "type": "command",
@@ -138,9 +138,27 @@ def hook_config() -> dict:
             }],
         }],
     }
+    # Off unless asked for, and the reason is measured rather than cautious.
+    # `prompt-hook` runs at 1167ms p50 and 1996ms p95 against the live store
+    # with the model warm, next to 160ms with the semantic leg off: a fresh
+    # process pays the ONNX session load on every prompt and has nothing to
+    # amortise it with, unlike the long-lived MCP server. That is comfortably
+    # inside the ten second timeout and is also a second added to every turn
+    # the user takes, which are not the same claim. Two hooks is what this tool
+    # asks for today; a third is a bargain the user should strike on purpose.
+    if prompt_hook:
+        config["UserPromptSubmit"] = [{
+            "hooks": [{
+                "type": "command",
+                "command": "nenapu prompt-hook",
+                "timeout": 10,
+            }],
+        }]
+    return config
 
 
-def install_hooks(settings_path: Path | None = None) -> tuple[bool, str]:
+def install_hooks(settings_path: Path | None = None, *,
+                  prompt_hook: bool = False) -> tuple[bool, str]:
     path = (settings_path or Path("~/.claude/settings.json")).expanduser()
     try:
         settings = json.loads(path.read_text()) if path.exists() else {}
@@ -149,7 +167,7 @@ def install_hooks(settings_path: Path | None = None) -> tuple[bool, str]:
 
     hooks = settings.setdefault("hooks", {})
     changed = []
-    for event, entries in hook_config().items():
+    for event, entries in hook_config(prompt_hook).items():
         existing = hooks.setdefault(event, [])
         ours = [e for e in existing if HOOK_MARKER in json.dumps(e)]
         if ours == entries:
