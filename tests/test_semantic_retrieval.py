@@ -39,6 +39,7 @@ Assumed seam, proposed by the plan and not yet in the codebase::
 """
 
 import hashlib
+import math
 import time
 
 import pytest
@@ -64,9 +65,14 @@ class _ScriptedEmbedder:
 
     dim = 3
 
-    def __init__(self, near=(), *, graded=None):
+    def __init__(self, near=(), *, graded=None, queries=(QUERY,)):
         self._near = set(near)
         self._graded = graded or {}
+        # Which strings count as *the query*, i.e. sit on the axis everything
+        # else is measured against. Without this the graded similarities only
+        # mean what they say when the search happens to use `QUERY`, and a test
+        # that searched for anything else would silently measure hash noise.
+        self._queries = set(queries)
         self.calls = 0
 
     def embed(self, texts):
@@ -77,12 +83,24 @@ class _ScriptedEmbedder:
         if text in self._graded:
             weight = self._graded[text]
             return [weight, 1.0 - weight, 0.0]
-        if text == QUERY or text in self._near:
+        if text in self._queries or text in self._near:
             return [1.0, 0.0, 0.0]
         # Hash into the third axis so unrelated facts are stably orthogonal to
         # the query rather than accidentally similar to each other.
         seed = hashlib.sha256(text.encode()).digest()[0] / 255.0
         return [0.0, 1.0 - seed, seed]
+
+
+def _at_cosine(target: float) -> float:
+    """The graded weight that makes `_ScriptedEmbedder` produce this cosine.
+
+    The embedder builds `[w, 1-w, 0]`, whose cosine against the query axis is
+    `w / sqrt(w**2 + (1-w)**2)`, not `w`. Solving for it here keeps the tests
+    stating the similarity they mean rather than a weight that happens to
+    produce it.
+    """
+    t = target / math.sqrt(1.0 - target * target)
+    return t / (1.0 + t)
 
 
 @pytest.fixture
@@ -279,8 +297,8 @@ def test_a_distant_fact_is_not_retrieved(store, monkeypatch):
     has a high baseline similarity -- unrelated English scores about 0.5 -- so
     a naive floor near zero would let everything through.
     """
-    graded = {"a fact that is merely nearby": 0.5,
-              "a fact that actually answers it": 0.95}
+    graded = {"a fact that is merely nearby": _at_cosine(0.50),
+              "a fact that actually answers it": _at_cosine(0.95)}
     _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
     near, _ = store.write(Fact(text="a fact that is merely nearby"))
     answer, _ = store.write(Fact(text="a fact that actually answers it"))
@@ -303,7 +321,7 @@ def test_a_caller_can_set_its_own_threshold(store, monkeypatch):
     `min_confidence`: one asks how close the match is, the other how much the
     fact is believed. They are different questions and a caller may want to
     move one without the other."""
-    graded = {"a fact that is merely nearby": 0.5}
+    graded = {"a fact that is merely nearby": _at_cosine(0.50)}
     _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
     near, _ = store.write(Fact(text="a fact that is merely nearby"))
 
@@ -318,13 +336,86 @@ def test_a_caller_can_set_its_own_threshold(store, monkeypatch):
 def test_the_floor_never_silences_a_lexical_hit(store, monkeypatch):
     """The floor governs what the semantic leg may *add*. A fact BM25 found on
     its own is in the pool on its own merits and stays there scoring zero."""
-    graded = {"the deploy script lives in bin/release": 0.1}
+    graded = {"the deploy script lives in bin/release": _at_cosine(0.10)}
     _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
     fact, _ = store.write(Fact(text="the deploy script lives in bin/release"))
 
     results = store.search("deploy", log_recall=False, mark_used=False)
 
     assert fact.id in _ids(results)
+
+
+def test_a_quoted_phrase_gets_no_semantic_neighbours(store, monkeypatch):
+    """Quoting is an explicit request to be literal. Two words next to each
+    other are a different claim from the same two words in a paragraph, and
+    answering with what the phrase *resembles* is answering a question the
+    user deliberately did not ask.
+
+    Measured: "the connection is over TLS and the pool table is in the office"
+    sits at 0.752 against the phrase "connection pool", against 0.843 for the
+    fact that actually contains it. No threshold separates those without also
+    excluding real answers, which run 0.69 to 0.73.
+    """
+    graded = {"the connection is over TLS and the pool table is elsewhere":
+              _at_cosine(0.75)}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(
+        graded=graded, queries=('"connection pool"',)))
+    wanted, _ = store.write(Fact(text="the connection pool is capped at 20"))
+    other, _ = store.write(
+        Fact(text="the connection is over TLS and the pool table is elsewhere"))
+
+    results = store.search('"connection pool"', log_recall=False, mark_used=False)
+
+    assert wanted.id in _ids(results)
+    assert other.id not in _ids(results)
+
+
+def test_a_store_where_everything_is_equally_close_contributes_nothing(
+    store, monkeypatch
+):
+    """The embedding analogue of document frequency. A term in most of the
+    store narrows nothing, and neither does a query every fact is equally near:
+    the leg has no opinion, so it should not vote.
+
+    Measured on the real store, a genuine query's top hit sits about 0.15 above
+    the median similarity for that query, while here the whole population is
+    flat. That distance, not the raw score, is what says the embedding found
+    something.
+    """
+    graded = {f"the service number {i} runs somewhere": _at_cosine(0.68)
+              for i in range(30)}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(
+        graded=graded, queries=("service somewhere",)))
+    for text in graded:
+        store.write(Fact(text=text))
+
+    results = store.search("service somewhere", log_recall=False, mark_used=False)
+
+    assert all(why["semantic"] == 0.0 for _f, _s, why in results)
+
+
+def test_the_background_rule_needs_a_population_to_judge(store, monkeypatch):
+    """On a handful of facts a median is noise, so the adaptive rule stands
+    down and the absolute floor decides alone. The same reason
+    `COMMON_TERM_MIN_FACTS` guards the query planner's frequency rule."""
+    from nenapu.store import SEMANTIC_BACKGROUND_MIN
+
+    assert SEMANTIC_BACKGROUND_MIN >= 10
+    graded = {"a fact that actually answers it": _at_cosine(0.95),
+              "a fact that is merely nearby": _at_cosine(0.50)}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
+    answer, _ = store.write(Fact(text="a fact that actually answers it"))
+    store.write(Fact(text="a fact that is merely nearby"))
+
+    results = store.search(QUERY, log_recall=False, mark_used=False)
+
+    assert answer.id in _ids(results)
+
+
+def test_the_background_margin_is_written_down():
+    from nenapu.store import SEMANTIC_BACKGROUND_MARGIN
+
+    assert 0.0 < SEMANTIC_BACKGROUND_MARGIN < 0.5
 
 
 # --- cost --------------------------------------------------------------------
