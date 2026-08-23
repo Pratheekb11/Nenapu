@@ -208,13 +208,11 @@ def embed_query(text: str, *, deadline_ms: int | None = None) -> list[float] | N
     """Embed a query under a wall-clock deadline.
 
     This runs inside a hook that fires on every prompt the user types. A slow
-    model must cost the prompt its memory block, never its latency, so the work
-    happens on a daemon thread the caller is free to abandon.
+    model must cost the prompt its memory block, never its latency, so all of
+    the work -- loading included -- happens on a daemon thread the caller is
+    free to abandon.
     """
     if not text:
-        return None
-    embedder = get_embedder()
-    if embedder is None:
         return None
 
     budget = deadline_ms if deadline_ms is not None else _deadline_from_env()
@@ -222,6 +220,15 @@ def embed_query(text: str, *, deadline_ms: int | None = None) -> list[float] | N
 
     def run() -> None:
         try:
+            # Loading happens inside the guarded thread, not before it.
+            # Building the ONNX session is the expensive half -- measured at
+            # roughly a second of the prompt hook's 1167ms p50, against 160ms
+            # with the leg off -- and a fresh CLI process pays it on every
+            # prompt with nothing to amortise it. A deadline that covered only
+            # inference would be guarding the cheap part.
+            embedder = get_embedder()
+            if embedder is None:
+                return
             vectors = embedder.embed([text])
             if vectors:
                 box["vec"] = vectors[0]
