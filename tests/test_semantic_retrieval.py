@@ -264,6 +264,69 @@ def test_the_caller_can_turn_the_leg_off(store, monkeypatch):
     assert answer.id not in _ids(results)
 
 
+# --- the similarity floor ----------------------------------------------------
+
+
+def test_a_distant_fact_is_not_retrieved(store, monkeypatch):
+    """Without a floor the pool returns its top N whatever the scores are, so
+    a query the store cannot answer comes back with its least-unrelated facts
+    dressed as hits. That breaks the planner's oldest guarantee: a query for
+    something the store does not hold must answer with nothing.
+
+    The cutoff is calibrated, not guessed. Measured with bge-small on real
+    text, unrelated pairs top out around 0.51 and genuinely related ones start
+    around 0.69, so 0.60 sits in the gap with margin on both sides. The model
+    has a high baseline similarity -- unrelated English scores about 0.5 -- so
+    a naive floor near zero would let everything through.
+    """
+    graded = {"a fact that is merely nearby": 0.5,
+              "a fact that actually answers it": 0.95}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
+    near, _ = store.write(Fact(text="a fact that is merely nearby"))
+    answer, _ = store.write(Fact(text="a fact that actually answers it"))
+
+    results = store.search(QUERY, log_recall=False, mark_used=False)
+
+    assert answer.id in _ids(results)
+    assert near.id not in _ids(results)
+
+
+def test_the_floor_is_written_down_in_one_place():
+    from nenapu.store import SEMANTIC_FLOOR
+
+    assert 0.0 < SEMANTIC_FLOOR < 1.0
+    assert SEMANTIC_FLOOR == 0.60
+
+
+def test_a_caller_can_set_its_own_threshold(store, monkeypatch):
+    """`threshold` in the retrieval design, kept distinct from
+    `min_confidence`: one asks how close the match is, the other how much the
+    fact is believed. They are different questions and a caller may want to
+    move one without the other."""
+    graded = {"a fact that is merely nearby": 0.5}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
+    near, _ = store.write(Fact(text="a fact that is merely nearby"))
+
+    strict = store.search(QUERY, log_recall=False, mark_used=False)
+    loose = store.search(QUERY, semantic_threshold=0.1,
+                         log_recall=False, mark_used=False)
+
+    assert near.id not in _ids(strict)
+    assert near.id in _ids(loose)
+
+
+def test_the_floor_never_silences_a_lexical_hit(store, monkeypatch):
+    """The floor governs what the semantic leg may *add*. A fact BM25 found on
+    its own is in the pool on its own merits and stays there scoring zero."""
+    graded = {"the deploy script lives in bin/release": 0.1}
+    _with_embedder(monkeypatch, _ScriptedEmbedder(graded=graded))
+    fact, _ = store.write(Fact(text="the deploy script lives in bin/release"))
+
+    results = store.search("deploy", log_recall=False, mark_used=False)
+
+    assert fact.id in _ids(results)
+
+
 # --- cost --------------------------------------------------------------------
 
 
