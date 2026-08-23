@@ -21,19 +21,19 @@ and the bug it fixes:
 
 The block the plan specifies has four sections, in this order:
 
-    # Memory (nenapu) — physical-ads-and-OOH-MVP-backend
+    # Memory (nenapu): physical-ads-and-OOH-MVP-backend
 
     Where you left off (3 days ago, claude-code):
     - touched backend/app/bookings.py, ...
     - last commit: "Add booking overlap constraint"
 
-    Open here — mentioned but not done:
+    Open here, mentioned but not done:
     - Rate limiting on the public availability endpoint
 
     Changed since you were last here:
     - 4 commits on main by another session; backend/app/models.py moved
 
-    Previously corrected — do not repeat these:
+    Previously corrected, do not repeat these:
     - Commits without a Co-Authored-By trailer.
 
 Three of the four come from the activity ledger, not from a model. The
@@ -716,7 +716,7 @@ def test_with_no_activity_history_the_block_is_todays_block(store):
 
     block = recall(store, scope=SCOPE)
 
-    assert block.splitlines()[0] == f"# Memory (nenapu) — {SCOPE}"
+    assert block.splitlines()[0] == f"# Memory (nenapu): {SCOPE}"
     assert "co-author" in block
 
 

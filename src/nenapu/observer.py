@@ -893,7 +893,7 @@ def _open_loops_section(conn, scope: str) -> list[str]:
     loops = LoopBook(conn).open_for_scope(scope)
     if not loops:
         return []
-    lines = ["Open here — mentioned but not done:"]
+    lines = ["Open here, mentioned but not done:"]
     lines += [f"- {loop['text']}" for loop in loops[:MAX_OPEN_LOOPS]]
     lines.append("")
     return lines
@@ -1223,7 +1223,7 @@ def recall_context(
     if corrections:
         sections["corrections"] = _Section(
             "corrections",
-            ["Previously corrected — do not repeat these:"]
+            ["Previously corrected, do not repeat these:"]
             + [_correction_line(f) for f in corrections],
             corrections,
         )
@@ -1236,12 +1236,12 @@ def recall_context(
     if doubted:
         sections["falsified"] = _Section(
             "falsified",
-            ["Do not rely on these — what they rested on was falsified:"]
+            ["Do not rely on these, what they rested on was falsified:"]
             + [f"- {f.text}" for f in doubted],
             doubted,
         )
 
-    header = f"# Memory (nenapu) — {scope}" if scope else "# Memory (nenapu)"
+    header = f"# Memory (nenapu): {scope}" if scope else "# Memory (nenapu)"
     kept = _fit(sections, _token_estimate(header) + 2, INJECTION_TOKEN_BUDGET)
 
     lines = [header, ""]
