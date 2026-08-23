@@ -505,6 +505,8 @@ def recall(
     limit: int = 10,
     min_confidence: float = 0.0,
     json_out: bool = typer.Option(False, "--json"),
+    explain: bool = typer.Option(False, "--explain",
+                                 help="Show the semantic and anchor terms"),
     db: str = DB_OPT,
 ) -> None:
     """Recall facts, ranked by match and current believability."""
@@ -526,17 +528,34 @@ def recall(
         console.print("[dim]nothing above threshold[/]")
         return
 
+    # Opt-in, because six columns is already a lot for a terminal and someone
+    # recalling a fact usually wants the fact. `sem` is how near the query was
+    # in embedding space, `near` the anchor -- whichever of the session's files
+    # or the query's entities reached this fact.
+    columns = ["id", "score", "belief", "age", "check"]
+    if explain:
+        columns += ["sem", "near"]
+    columns.append("fact")
+
     table = Table(show_lines=False)
-    for col in ("id", "score", "belief", "age", "check", "fact"):
+    for col in columns:
         table.add_column(col)
     for fact, score, why in hits:
         check = {"pass": "[green]pass[/]", "fail": "[red]FAIL[/]", "none": "[dim]-[/]"}.get(
             fact.verify_status, fact.verify_status
         )
-        table.add_row(
+        row = [
             str(fact.id), f"{score:.2f}", f"{why['confidence']:.2f}",
-            f"{why['age_days']:.0f}d", check, fact.text[:80],
-        )
+            f"{why['age_days']:.0f}d", check,
+        ]
+        if explain:
+            # `.get` rather than indexing: a store searched through an older
+            # code path, or a caller holding an explain dict from before these
+            # terms existed, should still render.
+            anchor = max(why.get("proximity", 0.0), why.get("entity", 0.0))
+            row += [f"{why.get('semantic', 0.0):.2f}", f"{anchor:.2f}"]
+        row.append(fact.text[:80])
+        table.add_row(*row)
     console.print(table)
 
 
