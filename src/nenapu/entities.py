@@ -851,6 +851,98 @@ def _in_scope(conn: sqlite3.Connection, entity_ids: list[int], scopes) -> set[in
     return {r["id"] for r in rows}
 
 
+# ---------- the query anchor ----------
+#
+# `near=` answers "what is this session working on". These answer "what did the
+# user just ask about". Same traversal, different starting names: reusing
+# `proximity_scores` rather than writing a second walk keeps the depth cap, the
+# cycle guard, the alias resolution and the scope guard that already have their
+# own regression file.
+
+# Half weight where an entity touches this fraction of the store. A fraction
+# rather than a fixed count because a knee tuned at 400 facts goes flat at
+# 40,000: every entity would look rare and the term would stop discriminating
+# without anyone noticing.
+LINK_WEIGHT_FRACTION = 0.08
+
+# On a five-fact store every entity is attached to most of it. Flooring the
+# corpus size keeps the weight meaningful until there is enough store to judge
+# promiscuity by, the same reason `COMMON_TERM_MIN_FACTS` exists in the query
+# planner.
+MIN_ACTIVE_FACTS = 10
+
+# One entity on twenty facts would otherwise fill every slot the query had.
+MAX_ENTITY_BOOSTED = 5
+
+
+def query_entity_rows(conn: sqlite3.Connection, names, scopes=None):
+    """Entities that already exist under one of these names, as (id, name).
+
+    Never invents. This may connect a query to something observed to exist and
+    nothing else, which is the guard `mentions_from_text` is built on.
+
+    One indexed statement, served by `idx_entities_name`, so a query naming
+    nothing costs a single lookup that returns no rows and starts no walk.
+    """
+    unique = [n for n in dict.fromkeys(names or []) if n]
+    if not unique:
+        return []
+    sql = f"SELECT id, name FROM entities WHERE name IN ({','.join('?' * len(unique))})"
+    args: list = list(unique)
+    if scopes:
+        scopes = list(scopes)
+        sql += f" AND scope IN ({','.join('?' * len(scopes))})"
+        args += scopes
+    return [(r["id"], r["name"]) for r in conn.execute(sql, args)]
+
+
+def query_entities(conn: sqlite3.Connection, names, scopes=None) -> list[str]:
+    """The subset of these names that name something the store knows."""
+    return [name for _id, name in query_entity_rows(conn, names, scopes)]
+
+
+def link_weight(n_linked: int, n_active: int) -> float:
+    """What a link to an entity attached to `n_linked` facts is worth.
+
+    An entity on half the store distinguishes nothing, so the weight falls off
+    as it spreads. Flat near the head on purpose: an entity on two facts is
+    barely less telling than one on one, and punishing that difference would
+    add noise rather than signal.
+    """
+    knee = LINK_WEIGHT_FRACTION * max(n_active, MIN_ACTIVE_FACTS)
+    excess = (max(n_linked, 0) - 1) / knee
+    return 1.0 / (1.0 + excess * excess)
+
+
+def entity_weight(conn: sqlite3.Connection, entity_id: int) -> float:
+    """The entity's learned standing, as a factor that can only demote.
+
+    `reward_edges_for_grades` already moves `entity_edges.weight` on graded
+    recalls. Reading it here closes the loop onto retrieval, but only downward:
+    an untrained entity is neutral, a penalised one stops steering, and a
+    rewarded one cannot climb past neutral.
+
+    The asymmetry is the same one alias resolution documents. A missed boost
+    leaves ranking exactly where it already is. An inflated one compounds --
+    the ranker promotes what it already likes, that recall grades well because
+    it was shown, and the weight climbs again.
+    """
+    row = conn.execute(
+        "SELECT MAX(weight) AS w FROM entity_edges"
+        " WHERE (src_id = ? OR dst_id = ?) AND valid_to IS NULL",
+        (entity_id, entity_id),
+    ).fetchone()
+    learned = row["w"] if row and row["w"] is not None else 1.0
+    return min(1.0, max(MIN_EDGE_WEIGHT, learned))
+
+
+def linked_fact_count(conn: sqlite3.Connection, entity_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM fact_entities WHERE entity_id = ?", (entity_id,)
+    ).fetchone()
+    return int(row["c"] or 0)
+
+
 def proximity_scores(conn: sqlite3.Connection, names, scopes=None, *,
                      depth: int = PROXIMITY_DEPTH) -> dict[int, float]:
     """How near each fact is to the anchor, as fact id to 0..1.

@@ -38,7 +38,14 @@ from .models import (
     now,
     row_to_fact,
 )
-from .entities import proximity_scores
+from .entities import (
+    MAX_ENTITY_BOOSTED,
+    entity_weight,
+    link_weight,
+    linked_fact_count,
+    proximity_scores,
+    query_entity_rows,
+)
 from .outcomes import Ledger, outcome_signal
 from .db import commit
 from .db import transaction as db_transaction
@@ -695,6 +702,75 @@ class Store:
                 return []
         return list(found.values())
 
+    def _entity_boost(
+        self,
+        query: str,
+        plan: QueryPlan,
+        *,
+        scope: str | Sequence[str] | None,
+    ) -> dict[int, float]:
+        """How near each fact is to what the query named, as fact id to 0..1.
+
+        `boost = similarity * entity_weight * link_weight`. Similarity is the
+        graph distance the traversal already computes; the two weights say how
+        much that nearness is worth -- how specific the entity is, and how well
+        it has served past recalls.
+
+        Capped, because one entity attached to twenty facts would otherwise
+        fill every slot the query had.
+        """
+        scopes = _scope_list(scope)
+        rows = query_entity_rows(self.conn, _query_names(query, plan), scopes)
+        if not rows:
+            # The cheap exit that keeps an unanchored query off the graph.
+            return {}
+
+        active = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM facts WHERE status = 'active'"
+            + (f" AND scope IN ({','.join('?' * len(scopes))})" if scopes else ""),
+            scopes,
+        ).fetchone()["c"]
+
+        boost: dict[int, float] = {}
+        for entity_id, name in rows:
+            weight = entity_weight(self.conn, entity_id) * link_weight(
+                linked_fact_count(self.conn, entity_id), active
+            )
+            for fact_id, similarity in proximity_scores(self.conn, [name], scopes).items():
+                value = similarity * weight
+                if value > boost.get(fact_id, 0.0):
+                    boost[fact_id] = value
+
+        if len(boost) > MAX_ENTITY_BOOSTED:
+            ranked = sorted(boost.items(), key=lambda kv: kv[1], reverse=True)
+            boost = dict(ranked[:MAX_ENTITY_BOOSTED])
+        return boost
+
+    def _facts_by_id(
+        self,
+        ids: Sequence[int],
+        *,
+        statuses: Sequence[str],
+        scope: str | Sequence[str] | None,
+    ) -> list[Fact]:
+        """Facts the entity anchor reached that the lexical pool did not.
+
+        Re-filtered by scope and status here rather than trusted from the
+        traversal: a new caller of the graph is a new way to lose the guard.
+        """
+        if not ids:
+            return []
+        sql = (
+            f"SELECT * FROM facts WHERE id IN ({','.join('?' * len(ids))})"
+            f" AND status IN ({','.join('?' * len(statuses))})"
+        )
+        args: list = [*ids, *statuses]
+        scopes = _scope_list(scope)
+        if scopes:
+            sql += f" AND scope IN ({','.join('?' * len(scopes))})"
+            args.extend(scopes)
+        return [row_to_fact(r) for r in self.conn.execute(sql, args)]
+
     def _semantic_pool(
         self,
         query_vec: Sequence[float],
@@ -814,6 +890,23 @@ class Store:
             proximity_scores(self.conn, near, _scope_list(scope)) if near else {}
         )
 
+        # The query anchor. Same slot as the session anchor and the same
+        # meaning -- how near this fact is to what is being asked about -- so
+        # they combine as a max rather than accumulating into a fact being
+        # counted near twice. A query naming no entity leaves `proximity`
+        # numerically exactly where it was.
+        entity_boost = (
+            self._entity_boost(query, plan, scope=scope)
+            if plan.is_search and not fallback else {}
+        )
+        if entity_boost:
+            already = {c.fact.id for c in candidates}
+            reached = [i for i in entity_boost if i not in already]
+            for fact in self._facts_by_id(reached, statuses=statuses, scope=scope):
+                candidates.append(
+                    _Candidate(fact=fact, lexical=0.0, key_match=False, tag_match=False)
+                )
+
         at = now()
         scored: list[tuple[Fact, float, dict]] = []
         for candidate in candidates:
@@ -821,11 +914,13 @@ class Store:
             conf = effective_confidence(fact, at)
             usage = min(1.0, math.log1p(fact.use_count) / math.log(11))  # saturates ~10 uses
             near_score = proximity.get(fact.id, 0.0)
+            entity_score = entity_boost.get(fact.id, 0.0)
+            anchor = max(near_score, entity_score)
             score = (
                 SEARCH_WEIGHTS["lexical"] * lex
                 + SEARCH_WEIGHTS["confidence"] * conf
                 + SEARCH_WEIGHTS["usage"] * usage
-                + SEARCH_WEIGHTS["proximity"] * near_score
+                + SEARCH_WEIGHTS["proximity"] * anchor
             )
             if conf < min_confidence:
                 continue
@@ -839,6 +934,7 @@ class Store:
                         "usage": round(usage, 3),
                         "proximity": round(near_score, 3),
                         "semantic": round(semantic_scores.get(fact.id, 0.0), 3),
+                        "entity": round(entity_score, 3),
                         "key_match": candidate.key_match,
                         "tag_match": candidate.tag_match,
                         "fallback": fallback,
@@ -1001,6 +1097,18 @@ def _parse_query(raw: str) -> tuple[list[str], list[str]]:
             continue
         terms.append(lowered)
     return phrases, terms[:MAX_QUERY_TERMS]
+
+
+def _query_names(raw: str, plan: QueryPlan) -> list[str]:
+    """Candidate entity names in a query.
+
+    Raw whitespace tokens first, because `_parse_query` shreds
+    `services/auth/routes.py` into four words and none of them name the file.
+    The planned words follow, for entities whose name is a single ordinary
+    word. Nothing here decides an entity exists; the lookup does.
+    """
+    tokens = [t.strip(".,;:!?()[]{}<>\"'") for t in (raw or "").split()]
+    return [t for t in tokens if t] + sorted(plan.words())
 
 
 def _suspect_reason(fact: Fact) -> str | None:
