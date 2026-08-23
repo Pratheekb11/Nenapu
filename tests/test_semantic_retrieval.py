@@ -218,19 +218,28 @@ def test_the_pool_is_capped_by_score_and_not_by_rowid(store, monkeypatch):
 # --- the degradation contract ------------------------------------------------
 
 
-def test_search_without_an_embedder_is_unchanged(store, monkeypatch):
+def test_a_missing_embedder_behaves_like_a_disabled_one(store, monkeypatch):
     """The property that lets CI run the whole suite without the optional
-    dependency, and that keeps a copied store readable anywhere."""
+    dependency, and that keeps a copied store readable anywhere.
+
+    Compared against `semantic=False` rather than against the hybrid result on
+    purpose. The two weight profiles are *meant* to rank differently -- that is
+    what tests/test_hybrid_fusion.py exists for -- so asserting they agree
+    would assert the fusion does nothing. What must hold is that an absent
+    embedder and an explicitly switched-off one are the same code path.
+    """
     _with_embedder(monkeypatch, _ScriptedEmbedder(near=[ANSWER]))
     store.write(Fact(text="the deploy script lives in bin/release"))
     store.write(Fact(text="deploy runs from the release branch"))
-    with_leg = store.search("deploy", log_recall=False, mark_used=False)
+    switched_off = store.search("deploy", semantic=False,
+                                log_recall=False, mark_used=False)
 
     monkeypatch.setattr(embeddings, "get_embedder", lambda: None)
-    without = store.search("deploy", log_recall=False, mark_used=False)
+    absent = store.search("deploy", log_recall=False, mark_used=False)
 
-    assert _ids(with_leg) == _ids(without)
-    for _f, _s, why in without:
+    assert _ids(switched_off) == _ids(absent)
+    for (_fa, score_off, _wa), (_fb, score_on, why) in zip(switched_off, absent):
+        assert score_off == pytest.approx(score_on)
         assert why.get("semantic", 0.0) == 0.0
 
 
