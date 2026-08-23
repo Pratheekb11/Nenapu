@@ -624,10 +624,14 @@ is what keeps one from drowning the other:
 
 The bad rate on decided recalls is 4.6%, well under the 30% that would have
 called for vectors, and coverage is 93 sessions given memory against 70
-given nothing, 57% against a floor of 50%. So **vectors are not what this
-store needs**: the facts that arrive are mostly not wrong. What they mostly
-are is unused, which is a selection question rather than a ranking one, and
-the answer to it is the anchoring work rather than an embedding index.
+given nothing, 57% against a floor of 50%. The facts that arrive are mostly
+not wrong. What they mostly are is unused, which is a selection question
+rather than a ranking one.
+
+> **Superseded on 2026-08-23.** This section used to conclude "vectors are
+> not what this store needs". That conclusion has been overridden and the
+> reason is in *Overriding the gate*, below. The numbers above stand; the
+> inference from them did not.
 
 **The first reading of this gate was wrong, and how it was wrong is worth
 keeping.** It reported `coverage-problem` on 29% coverage: 193 sessions
@@ -776,3 +780,90 @@ Separately, thirteen `pytest.mark.xfail` marker variables (`e1`-`e4`, `e7`,
 applied to nothing. Their tasks landed and the markers were removed from the
 tests without removing the definitions. They are dead, and a reader should not
 read "not implemented yet" from them.
+
+
+## Overriding the gate, 2026-08-23
+
+The gate said `retrieval-is-not-the-problem` and the semantic leg was built
+anyway. That is a contradiction unless the reason is written down, so here it
+is.
+
+**The verdict was decided from three rows.** The gate reads two populations.
+The injection population had 408 graded recalls and drove the verdict. The
+query population had **three**, all bad — far under `MIN_GRADED_RECALLS`, which
+is 30. The honest reading of "query: 3 graded" is not "query retrieval is
+fine". It is "nobody has queried, so there is nothing to measure."
+
+**Nobody had queried because nothing queried.** 2077 of 2112 recalls came from
+the SessionStart block, which never calls `search` at all. The query population
+could not grow, because the only surface that produced query recalls was a
+human typing `nenapu recall` by hand. The gate was measuring a road with three
+cars on it and reporting that the road was fine.
+
+So the ordering is: build the thing that generates query traffic
+(`prompt_context` and the `UserPromptSubmit` hook), let the population grow,
+then re-run `nenapu retrieval` and let it decide on evidence. The gate is not
+being ignored. It is being given something to read.
+
+### What the semantic leg cost, measured
+
+| path | p50 | p95 |
+|---|---|---|
+| `prompt-hook`, semantic off | 160ms | 283ms |
+| `prompt-hook`, model warm | 1167ms | 1996ms |
+
+Twenty invocations against a copy of the live store, 506 of 506 facts indexed.
+Backfilling all 506 took 26 seconds.
+
+Roughly a second of every prompt is the ONNX session load, and a fresh CLI
+process pays it every time — unlike `nenapu-mcp`, which is long-lived and
+amortises it across a whole session. That is why the hook is opt-in: 2s p95
+against a 10s timeout is comfortable, and a second added to every turn is still
+a second added to every turn. A long-lived embedding process would remove it
+and is the obvious next move if per-prompt injection proves its worth.
+
+### The constants, and how they were derived
+
+Two cutoffs govern what the semantic leg may add. Both are measured, and both
+are here so the next reader can re-derive rather than trust them.
+
+`SEMANTIC_FLOOR = 0.60`. On this store, unrelated pairs score 0.46 to 0.51 and
+genuinely related ones 0.69 to 0.73, so 0.60 sits in the gap. bge-small scores
+unrelated English at about 0.5 — the model has a high baseline — so a floor
+near zero would admit everything.
+
+`SEMANTIC_BACKGROUND_MARGIN = 0.12`, with `SEMANTIC_BACKGROUND_MIN = 10`. The
+absolute floor weakens as the store grows: over 506 facts, nonsense still peaks
+at 0.610 against 0.693 for a real query. What separates them is the distance
+from the *median similarity for that same query* — 0.145 and 0.157 for real
+queries, 0.101 for nonsense, and about zero when every fact is equally near.
+This is document frequency in different clothes: a term in most of the store
+narrows nothing, and neither does a query the whole store is equally close to.
+Below ten scored facts a median is noise, so the rule stands down, exactly as
+`COMMON_TERM_MIN_FACTS` does for the planner.
+
+A quoted phrase disables the leg outright. No cutoff could have done it: the
+fact that merely shares both words scores 0.752 against 0.843 for the one
+containing the phrase, which overlaps the range real answers live in. Quoting
+is a request to be literal, and answering with what the phrase *resembles*
+answers a question the user deliberately did not ask.
+
+### What installing the embedder exposed
+
+Every gate up to that point ran the degraded path, because fastembed is not
+installed in CI. The first suite run with it present produced **ten failures**,
+and the split is the lesson: five were real defects in the semantic leg — no
+floor, no scale-invariant cutoff, no phrase rule — and five were tests that had
+only ever passed because the leg was absent.
+
+"1159 passed" had never been evidence that the hybrid path worked. It is worth
+running the suite both ways before trusting either.
+
+### Known, not fixed
+
+**A partially indexed store skews toward the indexed half.** An embedder being
+present selects `HYBRID_WEIGHTS` for every fact in the query, so a fact with no
+vector loses lexical headroom (0.45 down to 0.30) without gaining any semantic
+score to replace it. It self-corrects once `nenapu index --backfill` finishes,
+and `nenapu doctor` now reports coverage so the state is visible, but a
+half-finished backfill quietly favours what it has already reached.

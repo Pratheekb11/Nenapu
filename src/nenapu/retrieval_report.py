@@ -1,6 +1,6 @@
 """Read the recall ledger and answer one question: is retrieval what fails?
 
-Vectors and the entity tier were left unbuilt on purpose — "building them
+Vectors and the entity tier were left unbuilt at first — "building them
 first would invent the design that evidence is supposed to choose." This
 module is that evidence, and the rule that reads it, written down as code so
 the answer is counted rather than argued for.

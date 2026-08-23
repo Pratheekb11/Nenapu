@@ -129,6 +129,25 @@ staring at half an empty screen.
 Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
 it up.
 
+### Optional: retrieval by meaning
+
+```bash
+uv tool install "nenapu[embeddings]"   # adds fastembed, about 50MB
+nenapu index --warm                    # fetch the model once, never in a hook
+nenapu index --backfill                # embed what the store already holds
+```
+
+Without it, recall matches on text and belief and everything works. With it,
+a question can find a fact that shares no word with it — "how should I write
+commits" reaches "commit messages must carry no em dashes", which BM25 cannot
+do at any ranking. Retrieval degrades cleanly if the extra is absent, if the
+model was never fetched, or if `NENAPU_EMBEDDINGS=off`; a store copied to a
+machine without it stays fully readable.
+
+`nenapu doctor` says which state you are in. Per-prompt injection is a separate
+opt-in — `nenapu init --prompt-hook` — because it adds about a second to every
+turn on a cold process.
+
 ## It is a layer, not a tool call
 
 This is the part that matters, and it is where every other memory system
