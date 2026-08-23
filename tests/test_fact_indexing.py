@@ -260,7 +260,11 @@ def _run(args, db, **env):
     )
 
 
-def test_index_status_reports_coverage_without_writing(tmp_path):
+def test_index_status_reports_coverage_without_writing(tmp_path, no_embedder):
+    """The fixture writes with the embedder off deliberately. Without that the
+    in-process write indexes the fact and the test reports 1/1 on a machine
+    that installed the optional extra and 0/1 on one that did not, which makes
+    it a test of the environment rather than of the command."""
     db = tmp_path / "s.db"
     store = Store(connect(str(db)))
     store.write(Fact(text="a fact with no vector"))
