@@ -13,6 +13,7 @@ The rules that make this different from a notes file:
 from __future__ import annotations
 
 import hashlib
+import heapq
 import math
 import os
 import re
@@ -694,6 +695,55 @@ class Store:
                 return []
         return list(found.values())
 
+    def _semantic_pool(
+        self,
+        query_vec: Sequence[float],
+        *,
+        statuses: Sequence[str],
+        scope: str | Sequence[str] | None,
+        pool: int,
+    ) -> list[tuple[Fact, float]]:
+        """Facts nearest the query in embedding space, best first.
+
+        A retriever, not a re-ranker. The queries this leg exists for return
+        nothing from FTS5 at all -- "which database do we use" shares no term
+        with "the datastore is postgres" -- so a layer that only reordered
+        lexical hits would never have the answer in hand to reorder.
+
+        Brute force on purpose. At this corpus size an exact dot product over
+        every stored vector is faster than the index that would approximate
+        it, and it cannot return a different answer than the maths says.
+
+        Filtered by scope and status in SQL rather than after scoring, because
+        cosine similarity has no opinion about project boundaries or about
+        whether a fact was retired.
+        """
+        sql = (
+            "SELECT f.*, v.vec AS vec FROM fact_vectors v"
+            " JOIN facts f ON f.id = v.fact_id"
+            " WHERE v.model = ? AND f.status IN ("
+            + ",".join("?" * len(statuses)) + ")"
+        )
+        args: list = [embeddings.MODEL_NAME, *statuses]
+        if scope:
+            scopes = _scope_list(scope)
+            sql += f" AND f.scope IN ({','.join('?' * len(scopes))})"
+            args.extend(scopes)
+
+        width = len(query_vec)
+        scored: list[tuple[float, object]] = []
+        for row in self.conn.execute(sql, args):
+            try:
+                vec = embeddings.unpack(row["vec"])
+            except ValueError:
+                continue  # a corrupt blob is one missing fact, not a failed search
+            if len(vec) != width:
+                continue  # a vector from another model's space says nothing here
+            scored.append((max(0.0, embeddings.dot(query_vec, vec)), row))
+
+        best = heapq.nlargest(pool, scored, key=lambda pair: pair[0])
+        return [(row_to_fact(row), score) for score, row in best]
+
     def search(
         self,
         query: str,
@@ -706,6 +756,7 @@ class Store:
         session_id: str | None = None,
         log_recall: bool = True,
         near: Sequence[str] | None = None,
+        semantic: bool = True,
     ) -> list[tuple[Fact, float, dict]]:
         """Rank by lexical match *and* current believability.
 
@@ -732,6 +783,29 @@ class Store:
                 _Candidate(fact=f, lexical=0.0, key_match=False, tag_match=False)
                 for f in self.list_facts(scope=scope, status=statuses, limit=limit * 5)
             ]
+
+        # The semantic leg. Only a real query gets one: the recency fallback
+        # below is an answer to "no query at all", and embedding nothing would
+        # be an expensive way to retrieve arbitrary facts. Appended in
+        # descending similarity so that candidates which tie on every other
+        # term keep the order the embedding put them in.
+        semantic_scores: dict[int, float] = {}
+        if semantic and plan.is_search and not fallback:
+            raw = embeddings.embed_query(query)
+            if raw:
+                # Stored vectors are unit-normalised at pack time, so the query
+                # has to be too or the dot product is not a cosine.
+                unit = embeddings.unpack(embeddings.pack(raw))
+                already = {c.fact.id for c in candidates}
+                for fact, score in self._semantic_pool(
+                    unit, statuses=statuses, scope=scope, pool=limit * 5
+                ):
+                    semantic_scores[fact.id] = score
+                    if fact.id not in already:
+                        candidates.append(
+                            _Candidate(fact=fact, lexical=0.0,
+                                       key_match=False, tag_match=False)
+                        )
 
         # E7: only an anchored query pays for the entity tier. A store with
         # entities in it must not make every unanchored recall walk a graph it
@@ -764,6 +838,7 @@ class Store:
                         "confidence": round(conf, 3),
                         "usage": round(usage, 3),
                         "proximity": round(near_score, 3),
+                        "semantic": round(semantic_scores.get(fact.id, 0.0), 3),
                         "key_match": candidate.key_match,
                         "tag_match": candidate.tag_match,
                         "fallback": fallback,
