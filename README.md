@@ -17,11 +17,28 @@ Memory for AI agents that knows **what it rests on** and **whether it helped**.
 
 ---
 
+Nenapu is a CLI and one SQLite file that sits underneath the coding agent you
+already use. It records what you told it, what the agent worked out on its own,
+and what each of those rests on. When something turns out to be false,
+everything derived from it loses standing instead of staying confident. Claude
+Code hooks make it automatic: memory goes into a session when it starts, and
+what the session taught is read out when it ends.
+
+---
+
 ## The problem
+
+Your agent starts every session knowing nothing about the last one. The usual
+fix is to write things down — a growing `CLAUDE.md`, or a memory service — and
+that works until the notes stop being true. The repo gets reorganised, the port
+changes, a decision gets reversed, and the note that recorded it says so with
+exactly the confidence it had on the day it was written. Nothing in the file
+knows which lines helped yesterday and which sent the task the wrong way.
 
 Every agent memory system — Mem0, Zep, Supermemory, Letta — is
 **write-and-retrieve**. They compete on retrieval relevance: did the right text
-come back. Two things follow, and nothing addresses either.
+come back. That is one problem out of three, and the other two are the ones
+that make stored memory go bad.
 
 **A memory does not know what it rests on.**
 
@@ -101,52 +118,10 @@ belief = asserted × origin × decay(age) × check × track-record × support
 | `verification` | a recalled fact's check later fails | nothing |
 | `correction` | a recalled fact is contradicted soon after | nothing |
 | `agent` | harness reports task success | one MCP call |
-| `human` | `nenapu bad <recall_id>` | you, annoyed |
+| `human` | `nenapu misled <recall_id>` | you, annoyed |
 
 **Nothing is destroyed.** Superseded, archived, suspect and retired facts stay,
 with pointers to what replaced them and a journal of every action.
-
-## Install
-
-```bash
-uv tool install git+https://github.com/Pratheekb11/Nenapu    # or pipx, same URL
-uv tool install --editable .                               # from a clone
-nenapu                                                     # first run: sets it up
-```
-
-The first bare `nenapu` walks you through setup and then shows a how-to guide.
-It does that once — after that a bare `nenapu` is the landing view: wordmark,
-what the store holds, the dog, and every command you can type, on one screen
-that does not scroll. `nenapu guide` brings the walkthrough back.
-
-The view is built at several sizes and the largest one that fits is printed —
-it grows into the room it has rather than only shrinking out of trouble. On a
-tall wide terminal that means a big dog beside the readout and a list of what
-it learned lately; on a short one the block letters give way to the one-line
-mark; under 96 columns it stacks instead. Nothing scrolls, and nothing is left
-staring at half an empty screen.
-
-Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
-it up.
-
-### Optional: retrieval by meaning
-
-```bash
-uv tool install "nenapu[embeddings]"   # adds fastembed, about 50MB
-nenapu index --warm                    # fetch the model once, never in a hook
-nenapu index --backfill                # embed what the store already holds
-```
-
-Without it, recall matches on text and belief and everything works. With it,
-a question can find a fact that shares no word with it — "how should I write
-commits" reaches "commit messages must carry no em dashes", which BM25 cannot
-do at any ranking. Retrieval degrades cleanly if the extra is absent, if the
-model was never fetched, or if `NENAPU_EMBEDDINGS=off`; a store copied to a
-machine without it stays fully readable.
-
-`nenapu doctor` says which state you are in. Per-prompt injection is a separate
-opt-in — `nenapu init --prompt-hook` — because it adds about a second to every
-turn on a cold process.
 
 ## It is a layer, not a tool call
 
@@ -185,6 +160,93 @@ The agent never decides to remember. Next session it simply already knows.
 seconds is unusable, and one capped at 60 is killed before it writes anything,
 which is how a memory layer ends up looking like it works while learning
 nothing.
+
+## Quickstart
+
+### What you need first
+
+| you need | why | if you do not have it |
+|---|---|---|
+| Python 3.10+ | the runtime | `uv` will fetch and pin one for you: `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| `uv` (or `pipx`) | installs the CLI into its own environment, so it collides with nothing you have | uv as above; pipx: `python3 -m pip install --user pipx` |
+| Claude Code | the hooks are the automatic path, and the reason this keeps working when nobody cooperates | `npm install -g @anthropic-ai/claude-code`. Without it Nenapu still runs standalone, and Cursor, VS Code and Codex get the weaker MCP mode below |
+| a model backend | only for learning from a finished session — recall, cascade, checks and the ledger never call a model | the `claude` CLI on PATH already counts, and needs no second credential. Otherwise run a local server (`ollama serve`, `NENAPU_LLM=ollama`) and check it with `nenapu doctor --calibrate` first: small local models fail that gate |
+| `git` on PATH | optional — commits and deletions in the session ledger are read from `git diff` | every other part of the ledger works without it |
+
+### Install and wire it up
+
+```bash
+# 1 - install the CLI
+uv tool install git+https://github.com/Pratheekb11/Nenapu
+#   from a clone instead:  uv tool install --editable .
+
+# 2 - wire it into whatever agent is on this machine
+nenapu init          # asks before it writes to ~/.claude/settings.json
+
+# 3 - recover the history already sitting on disk
+nenapu backfill      # a parse of past transcripts: no model call, no tokens
+
+# 4 - see where you stand
+nenapu doctor        # hooks, model backend, store, embedding model
+nenapu pet           # whether the store is healthy, with a face on it
+```
+
+`nenapu init` never edits a config file without asking, and a pipe is not a
+person: with no terminal it prints what it *would* write and writes nothing.
+`--yes` is how a script says yes on purpose.
+
+Then open a new agent session. Memory is injected at the start of it, and what
+you correct during it is recorded when it ends.
+
+### If it does not seem to be learning
+
+Extraction is a model call over a whole session — about 83 seconds — and it
+runs detached, so nothing appears the moment a session ends.
+
+```bash
+nenapu doctor        # are the hooks actually installed, is a backend reachable
+nenapu queue         # what is waiting, held, or failed - and why it failed
+nenapu list          # what it has learned so far
+```
+
+### Where things live
+
+The first bare `nenapu` walks you through setup and then shows a how-to guide.
+It does that once — after that a bare `nenapu` is the landing view: wordmark,
+what the store holds, the dog, and every command you can type, on one screen
+that does not scroll. `nenapu guide` brings the walkthrough back.
+
+The view is built at several sizes and the largest one that fits is printed —
+it grows into the room it has rather than only shrinking out of trouble. On a
+tall wide terminal that means a big dog beside the readout and a list of what
+it learned lately; on a short one the block letters give way to the one-line
+mark; under 96 columns it stacks instead. Nothing scrolls, and nothing is left
+staring at half an empty screen.
+
+Store lives at `~/.nenapu/nenapu.db`. One SQLite file — copy it, diff it, back
+it up. It is created `0600` inside a `0700` directory.
+
+### Optional: retrieval by meaning
+
+```bash
+uv tool install "nenapu[embeddings] @ git+https://github.com/Pratheekb11/Nenapu"
+#   from a clone:  uv tool install --editable ".[embeddings]"
+nenapu index --warm                    # fetch the model once, never in a hook
+nenapu index --backfill                # embed what the store already holds
+```
+
+The extra adds fastembed, about 50MB, and `--warm` fetches
+`BAAI/bge-small-en-v1.5` (384 dimensions). Without it, recall matches on text
+and belief and everything works. With it, a question can find a fact that
+shares no word with it — "how should I write commits" reaches "commit messages
+must carry no em dashes", which BM25 cannot do at any ranking. Retrieval
+degrades cleanly if the extra is absent, if the model was never fetched, or if
+`NENAPU_EMBEDDINGS=off`; a store copied to a machine without it stays fully
+readable.
+
+`nenapu doctor` says which state you are in. Per-prompt injection is a separate
+opt-in — `nenapu init --prompt-hook` — because it adds about a second to every
+turn on a cold process.
 
 ## What you were doing, not only what you know
 
