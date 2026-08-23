@@ -152,7 +152,8 @@ def main(ctx: typer.Context, db: str = DB_OPT) -> None:
     # Hooks are machine-to-machine. `recall-hook` writes into a session's
     # context and `observe` runs headless after one ends; a mark on either is
     # noise in a log at best and content in a prompt at worst.
-    if not quiet and ctx.invoked_subcommand not in ("version", "recall-hook", "observe", "learn"):
+    if not quiet and ctx.invoked_subcommand not in (
+        "version", "recall-hook", "prompt-hook", "observe", "learn"):
         err_console.print(stamp(__version__))
 
 
@@ -1431,6 +1432,52 @@ def recall_hook(db: str = DB_OPT) -> None:
         raise typer.Exit(0)
     if text:
         print(text)
+
+
+@app.command(rich_help_panel=UPKEEP, hidden=True)
+def prompt_hook(db: str = DB_OPT) -> None:
+    """Emit memory for the prompt just typed. Wired to UserPromptSubmit.
+
+    The other half of `recall-hook`. That one runs once, before any user text
+    exists, so it can only guess from recent activity what a session is about.
+    This one has the prompt, so it can answer it.
+
+    Emits the structured `hookSpecificOutput` envelope rather than bare text.
+    `recall-hook` predates it and its raw stdout is asserted on elsewhere, but
+    a new surface should say which event it is answering rather than leave the
+    harness to infer that everything on stdout is context.
+
+    Silent when memory had nothing to add. This runs on every turn, and an
+    empty block emitted often enough teaches its reader to skip the block.
+    """
+    from .observer import hook_payload, prompt_context
+    from .store import project_scope
+
+    try:
+        payload = hook_payload(sys.stdin.read()) if not sys.stdin.isatty() else {}
+        # Valid JSON of the wrong shape is one of the ways an editor can hand
+        # this nothing useful, and it must not be louder than the others.
+        if not isinstance(payload, dict):
+            raise typer.Exit(0)
+        prompt = payload.get("prompt")
+        cwd = payload.get("cwd") or os.getcwd()
+        # Deliberately not `_stores`, for the same reason `recall-hook` avoids
+        # it: that fires the one-time greeting, and spending it inside a hook
+        # shows it to nobody.
+        store, _ = open_store(db or os.environ.get("NENAPU_DB"))
+        text = prompt_context(
+            store, prompt,
+            scope=project_scope(cwd),
+            session_id=payload.get("session_id"),
+            cwd=cwd,
+        )
+    except Exception:  # noqa: BLE001 — a hook must never break the session
+        raise typer.Exit(0)
+    if text:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": text,
+        }}))
 
 
 def _agent_name() -> str:
