@@ -37,6 +37,17 @@ from nenapu.models import Fact
 from nenapu.store import Store
 
 
+@pytest.fixture(autouse=True)
+def _no_embedder(monkeypatch):
+    """This file is about the table and its triggers, and it stubs vectors by
+    hand so it can prove them without an embedder. With the optional extra
+    installed the write path would index for real, and the assertions would
+    then measure whether fastembed happens to be present."""
+    from nenapu import embeddings
+
+    monkeypatch.setattr(embeddings, "get_embedder", lambda: None)
+
+
 @pytest.fixture
 def store():
     return Store(connect(":memory:"))

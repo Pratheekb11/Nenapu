@@ -265,12 +265,17 @@ def test_the_no_query_fallback_is_untouched(store, monkeypatch):
 
 
 def test_limit_still_truncates_after_sorting(store, monkeypatch):
+    """Matched lexically on purpose. This is about `limit`, and driving it
+    through the semantic pool would make it depend on what the similarity floor
+    admits, which is a different test in a different file."""
     _hybrid(monkeypatch)
     for i in range(10):
         store.write(Fact(text=f"{ANSWER} variant {i}"))
 
-    top = store.search(QUERY, limit=3, log_recall=False, mark_used=False)
-    wide = store.search(QUERY, limit=10, log_recall=False, mark_used=False)
+    top = store.search("datastore postgres variant", limit=3,
+                       log_recall=False, mark_used=False)
+    wide = store.search("datastore postgres variant", limit=10,
+                        log_recall=False, mark_used=False)
 
     assert len(top) == 3
     assert _ids(top) == _ids(wide)[:3]
