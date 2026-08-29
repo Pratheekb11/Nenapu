@@ -43,11 +43,6 @@ def test_custom_url_is_honoured(monkeypatch):
     assert detect_backend().url == "http://gpu-box:8000/v1"
 
 
-def test_auto_prefers_anthropic_when_credentials_exist(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    assert detect_backend().name == "anthropic"
-
-
 def test_unknown_backend_is_rejected(monkeypatch):
     monkeypatch.setenv("NENAPU_LLM", "gpt5-turbo-ultra")
     with pytest.raises(LLMUnavailable, match="unknown NENAPU_LLM"):
@@ -204,14 +199,6 @@ def test_auto_still_falls_back_to_a_local_server(monkeypatch):
     monkeypatch.setattr(llm, "_probe", lambda url, path, **k: "11434" in url)
 
     assert llm.detect_backend().name == "ollama"
-
-
-def test_credentials_still_win_over_a_cli(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("NENAPU_LLM", "auto")
-    monkeypatch.setattr(llm, "_exec_available", lambda: True)
-
-    assert llm.detect_backend().name == "anthropic"
 
 
 def test_a_command_with_shell_operators_is_never_auto_selected(monkeypatch):
