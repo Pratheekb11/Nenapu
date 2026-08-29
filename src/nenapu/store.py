@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import math
+from functools import lru_cache
 from statistics import median
 import os
 import re
@@ -208,12 +209,25 @@ def effective_confidence(fact: Fact, at: float | None = None) -> float:
 
 _WORD = re.compile(r"[a-z0-9]+")
 
+# These three are pure functions of one string, and `_distinct` asks them the
+# same question O(n^2) times: 500 candidate facts cost 740k `findall` calls and
+# 39 seconds, which is a SessionStart hook killed by its own 10s timeout long
+# before it prints anything. The store holds a few hundred facts and their text
+# is short, so a bounded cache turns that back into one tokenization per fact.
+_TEXT_CACHE = 4096
 
+
+@lru_cache(maxsize=_TEXT_CACHE)
 def _normalize_value(text: str) -> str:
     return " ".join(_WORD.findall(text.lower()))
 
 
 _NUM = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+@lru_cache(maxsize=_TEXT_CACHE)
+def _numbers(text: str) -> tuple[str, ...]:
+    return tuple(_NUM.findall(text))
 
 # Words that carry no claim. Two facts differing only in these are the same
 # fact phrased twice.
@@ -224,8 +238,10 @@ _FILLER = {
 }
 
 
-def _content(text: str) -> set[str]:
-    return set(_normalize_value(text).split()) - _FILLER
+@lru_cache(maxsize=_TEXT_CACHE)
+def _content(text: str) -> frozenset[str]:
+    """Frozen because it is cached: every caller reads it, none may mutate it."""
+    return frozenset(_normalize_value(text).split()) - _FILLER
 
 
 def looks_contradictory(a: str, b: str) -> tuple[bool, str]:
@@ -250,9 +266,9 @@ def looks_contradictory(a: str, b: str) -> tuple[bool, str]:
     if ca == cb:
         return False, "same content, different phrasing"
 
-    nums_a, nums_b = _NUM.findall(a), _NUM.findall(b)
+    nums_a, nums_b = _numbers(a), _numbers(b)
     if nums_a and nums_b and nums_a != nums_b:
-        return True, f"numeric mismatch: {nums_a} vs {nums_b}"
+        return True, f"numeric mismatch: {list(nums_a)} vs {list(nums_b)}"
 
     if ca < cb or cb < ca:
         # One says everything the other says, plus more: an elaboration.

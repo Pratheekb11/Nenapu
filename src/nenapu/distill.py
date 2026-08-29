@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import lru_cache
 
 from .llm import Backend, detect_backend, structured
 from .models import Fact, Origin, Status, now
@@ -35,8 +36,15 @@ def estimate_tokens(facts: list[Fact]) -> int:
 LENGTH_PARITY = 0.8
 
 
+@lru_cache(maxsize=4096)
+def _tokens(text: str) -> frozenset[str]:
+    """Cached for the same reason `_content` is: `_distinct` asks this O(n^2)
+    times over a few hundred distinct strings."""
+    return frozenset(_normalize_value(text).split())
+
+
 def _similarity(a: str, b: str) -> float:
-    ta, tb = set(_normalize_value(a).split()), set(_normalize_value(b).split())
+    ta, tb = _tokens(a), _tokens(b)
     if not ta or not tb:
         return 0.0
     shorter, longer = sorted((len(ta), len(tb)))
@@ -72,7 +80,7 @@ def _candidate_pairs(facts: list[Fact], threshold: float):
     prefix; indexing on "the" would hand back the entire store as candidates.
     """
     frequency: dict[str, int] = {}
-    contents: dict[int, set[str]] = {}
+    contents: dict[int, frozenset[str]] = {}
     for fact in facts:
         content = _content(fact.text)
         contents[fact.id] = content

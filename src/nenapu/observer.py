@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .db import commit, transaction
-from .distill import _similarity
+from .distill import LENGTH_PARITY, _similarity, _tokens
 from .entities import proximity_scores
 from .llm import Backend, LLMUnavailable, detect_backend, structured
 from .models import (
@@ -50,7 +50,7 @@ from .models import (
     Status,
     now,
 )
-from .store import Store, effective_confidence, scope_for
+from .store import Store, effective_confidence, looks_contradictory, scope_for
 
 # Keep the injected block small. It is prepended to every session, so it is
 # paid for on every request whether or not it gets used.
@@ -1019,16 +1019,30 @@ REDUNDANCY_THRESHOLD = 0.85
 
 def _restates(fact: Fact, other: Fact) -> bool:
     """Is `fact` the same claim as `other`, said again?"""
-    from .store import looks_contradictory
-
     if fact.key and fact.key == other.key:
         return True  # one key is one subject with one value, by construction
+    # Both conditions below have to hold, so the order is free to be the cheap
+    # one first. `_distinct` is O(n^2) and asked this 123k times for a store of
+    # 500 facts, and `looks_contradictory` is a full analysis that also builds
+    # a reason string nothing here reads. Leaving it to the handful of pairs
+    # that actually look alike is what keeps the SessionStart hook inside its
+    # ten second timeout, which it was overrunning by 27 seconds.
+    #
+    # Cheapest test first: two token sets of very different sizes cannot score
+    # high enough. Jaccard is bounded above by the length ratio, and the
+    # containment branch of `_similarity` only opens at `LENGTH_PARITY`, so
+    # under that ratio neither branch can reach the threshold. Two `len()`
+    # calls on cached frozensets, no set algebra at all.
+    own, theirs = _tokens(fact.text), _tokens(other.text)
+    shorter, longer = sorted((len(own), len(theirs)))
+    if not shorter or shorter < min(LENGTH_PARITY, REDUNDANCY_THRESHOLD) * longer:
+        return False
+    if _similarity(fact.text, other.text) < REDUNDANCY_THRESHOLD:
+        return False
     # A disagreement is not a restatement. Asked here of facts that share no
     # key, where a numeric mismatch is the clearest evidence there is that two
     # sentences are about two different values.
-    if looks_contradictory(fact.text, other.text)[0]:
-        return False
-    return _similarity(fact.text, other.text) >= REDUNDANCY_THRESHOLD
+    return not looks_contradictory(fact.text, other.text)[0]
 
 
 def _distinct(facts: list[Fact]) -> list[Fact]:
