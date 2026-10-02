@@ -119,6 +119,13 @@ HYBRID_WEIGHTS = {
     "usage": 0.05,
 }
 
+# How fast usage credit fades once a fact stops being used. `use_count` alone
+# never forgets, so a fact used heavily last year kept full usage credit over
+# one used twice this week. Shorter than the 90-day medium belief half-life on
+# purpose: being used recently says what the work needs now, while belief is
+# about whether the fact is still true, and that ages more slowly.
+USAGE_HALF_LIFE_DAYS = 30.0
+
 # Write contention: retry with jittered backoff rather than surfacing a lock
 # error to a user who only asked to remember something.
 LOCK_RETRIES = 6
@@ -177,6 +184,22 @@ def decay_factor(decay_class: str, age_seconds: float) -> float:
     if age_seconds <= 0:
         return 1.0
     return 0.5 ** ((age_seconds / DAY) / half_life)
+
+
+def usage_score(fact: Fact, at: float | None = None) -> float:
+    """How much recent use should lift a fact in recall, in [0, 1].
+
+    The count saturates around ten uses, as it always has, and the result
+    halves every `USAGE_HALF_LIFE_DAYS` since the fact was last used. A row
+    with a count but no use time fades from creation, the way
+    `effective_confidence` anchors on creation when nothing was verified.
+    """
+    if fact.use_count <= 0:
+        return 0.0
+    at = at or now()
+    saturation = min(1.0, math.log1p(fact.use_count) / math.log(11))
+    idle_days = max(0.0, at - (fact.last_used_at or fact.created_at)) / DAY
+    return saturation * 0.5 ** (idle_days / USAGE_HALF_LIFE_DAYS)
 
 
 def effective_confidence(fact: Fact, at: float | None = None) -> float:
@@ -1017,7 +1040,7 @@ class Store:
         for candidate in candidates:
             fact, lex = candidate.fact, candidate.lexical
             conf = effective_confidence(fact, at)
-            usage = min(1.0, math.log1p(fact.use_count) / math.log(11))  # saturates ~10 uses
+            usage = usage_score(fact, at)
             near_score = proximity.get(fact.id, 0.0)
             entity_score = entity_boost.get(fact.id, 0.0)
             anchor = max(near_score, entity_score)
