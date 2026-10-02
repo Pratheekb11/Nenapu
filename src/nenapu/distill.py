@@ -17,6 +17,7 @@ import math
 from dataclasses import dataclass
 from functools import lru_cache
 
+from . import embeddings
 from .llm import Backend, detect_backend, structured
 from .models import Fact, Origin, Status, now
 from .store import Store, _content, _normalize_value, effective_confidence
@@ -34,6 +35,14 @@ def estimate_tokens(facts: list[Fact]) -> int:
 # containment would archive the informative one. Only treat containment as
 # duplication when the two are close to the same length.
 LENGTH_PARITY = 0.8
+
+# Cosine over stored bge-small vectors at which two facts are one rule said
+# twice. Measured on 240 labelled pairs from the live store
+# (`python -m nenapu.dedup_eval score`): token similarity merged none of the
+# 23 true paraphrases among near misses, this cutoff merged 20 with no wrong
+# merge, and 0.85 let one through. What it cannot tell apart is an update, the
+# same subject with a newer value, which is why the newer fact survives.
+SEMANTIC_DUPLICATE = 0.875
 
 
 @lru_cache(maxsize=4096)
@@ -104,7 +113,12 @@ def _candidate_pairs(facts: list[Fact], threshold: float):
 
 
 def dedupe(store: Store, *, scope: str | None = None, threshold: float = 0.85) -> int:
-    """Archive near-duplicates, keeping the most-believed copy. No model call."""
+    """Archive near-duplicates. No model call.
+
+    Wording-level duplicates keep the most-believed copy. Reworded ones, found
+    by stored vectors, keep the newer copy, carrying over the higher
+    confidence and the summed occurrence count.
+    """
     facts = sorted(store.list_facts(scope=scope, limit=10_000),
                    key=effective_confidence, reverse=True)
 
@@ -136,6 +150,9 @@ def dedupe(store: Store, *, scope: str | None = None, threshold: float = 0.85) -
         else:
             doomed.append((fact, twin))
 
+    gone = {fact.id for fact, _ in doomed}
+    reworded = _semantic_pairs(store, [f for f in facts if f.id not in gone])
+
     with store.transaction():
         for fact, twin in doomed:
             store.conn.execute(
@@ -144,7 +161,68 @@ def dedupe(store: Store, *, scope: str | None = None, threshold: float = 0.85) -
             )
             store._journal("dedupe", fact_id=fact.id, actor="distill",
                            detail=f"into {twin.id}")
-    return len(doomed)
+        for fact, twin in reworded:
+            store.conn.execute(
+                "UPDATE facts SET status=?, distilled_into_id=?, updated_at=? WHERE id=?",
+                (Status.ARCHIVED, twin.id, now(), fact.id),
+            )
+            # A merge must never weaken what is believed or lose how often it
+            # was said, whichever copy happened to be the newer one.
+            store.conn.execute(
+                "UPDATE facts SET confidence = MAX(confidence, ?),"
+                " occurrences = occurrences + ?, updated_at = ? WHERE id = ?",
+                (fact.confidence, fact.occurrences, now(), twin.id),
+            )
+            store._journal("dedupe", fact_id=fact.id, actor="distill",
+                           detail=f"into {twin.id} (reworded)")
+    return len(doomed) + len(reworded)
+
+
+def _semantic_pairs(store: Store, facts: list[Fact]) -> list[tuple[Fact, Fact]]:
+    """(older, newer) pairs whose stored vectors say they are one rule.
+
+    Stored vectors only: one from another model, or for text since revised,
+    means nothing here, and embedding on the spot would make dedupe cost a
+    model load. With nothing indexed this returns nothing and dedupe is the
+    lexical pass it always was.
+    """
+    if len(facts) < 2:
+        return []
+    try:
+        import numpy as np
+    except ImportError:  # vectors only exist where fastembed, and so numpy, is
+        return []
+    by_id = {f.id: f for f in facts}
+    marks = ",".join("?" * len(by_id))
+    vectors: dict[int, list[float]] = {}
+    for row in store.conn.execute(
+        f"SELECT fact_id, model, text_sha, vec FROM fact_vectors WHERE fact_id IN ({marks})",
+        list(by_id),
+    ):
+        fact = by_id[row["fact_id"]]
+        if row["model"] == embeddings.MODEL_NAME and \
+                row["text_sha"] == embeddings.text_sha(fact.text):
+            vectors[fact.id] = embeddings.unpack(row["vec"])
+    # Newest first, so each fact is checked against the newer ones already
+    # kept and a run of rewordings collapses into the latest.
+    ordered = sorted((by_id[i] for i in vectors), key=lambda f: (f.created_at, f.id),
+                     reverse=True)
+    if len(ordered) < 2:
+        return []
+    m = np.asarray([vectors[f.id] for f in ordered], dtype=float)
+    norms = np.linalg.norm(m, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    sims = (m / norms) @ (m / norms).T
+
+    kept: list[int] = []
+    pairs: list[tuple[Fact, Fact]] = []
+    for i, fact in enumerate(ordered):
+        twin = next((k for k in kept if sims[i, k] >= SEMANTIC_DUPLICATE), None)
+        if twin is None:
+            kept.append(i)
+        else:
+            pairs.append((fact, ordered[twin]))
+    return pairs
 
 
 DISTILL_SCHEMA = {

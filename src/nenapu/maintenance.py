@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from . import embeddings
 from .activity import ActivityLedger
 from .audit import audit as run_audit
 from .db import commit
@@ -42,6 +43,11 @@ CHECK_CADENCE_SECONDS = 1 * 86400.0
 # is too slow the other way: a month of daily use between folds is the
 # readability problem the downsampling exists to prevent.
 ROLLUP_CADENCE_SECONDS = 1 * 86400.0
+
+# Facts embedded per tick before dedupe, so semantic dedupe has vectors to
+# read on a store that was never backfilled. Bounded so one tick never turns
+# into a full backfill; a large store fills over several ticks.
+INDEX_PER_TICK = 200
 
 
 def _last_run(store: Store, key: str) -> float | None:
@@ -119,6 +125,15 @@ def run_maintenance_tick(store: Store, *, touched_scopes: Sequence[str] = ()) ->
             pass
         else:
             _mark_run(store, "rollup")
+
+    # Vectors before dedupe: the reworded-duplicate pass reads stored vectors
+    # only, and a fact written without the embedder present has none. A no-op
+    # when there is no embedder.
+    if touched_scopes:
+        try:
+            embeddings.index_missing(store, limit=INDEX_PER_TICK)
+        except Exception:  # noqa: BLE001 — upkeep must never break a session
+            pass
 
     for scope in touched_scopes:
         dedupe(store, scope=scope)
