@@ -21,7 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0,<10", "httpx>=0.27,<1.0"]
+# numpy because semantic dedupe reads stored vectors with it, and its tests
+# write vectors directly; without it they never reach the merge.
+dev = ["pytest>=8.0,<10", "httpx>=0.27,<1.0", "numpy>=1.21"]
 lint = ["ruff>=0.6,<1.0"]
 # Semantic retrieval. Optional on purpose: FTS5 and the belief layer are the
 # floor, and a store must stay searchable on a machine that never installed

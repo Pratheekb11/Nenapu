@@ -1028,6 +1028,9 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pytest" },
 ]
 embeddings = [
@@ -1044,6 +1047,7 @@ requires-dist = [
     { name = "fastembed", marker = "extra == 'embeddings'", specifier = ">=0.4,<1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27,<1.0" },
     { name = "mcp", specifier = ">=1.2,<3.0" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.21" },
     { name = "pydantic", specifier = ">=2.6,<3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0,<10" },
     { name = "rich", specifier = ">=13.0,<16" },
