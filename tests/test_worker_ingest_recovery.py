@@ -130,7 +130,9 @@ def test_a_retry_after_a_failed_extraction_keeps_the_scope(tmp_path, store, db):
 def test_the_scope_a_resumed_session_returns_is_the_project_one(tmp_path, store, db):
     """`_ingest` returns the scope it used, and `drain` hands that to the
     maintenance tick as a touched scope — a `global` answer here would spend
-    the tick on the wrong scope as well as storing the facts in it."""
+    the tick on the wrong scope as well as storing the facts in it. `global`
+    is handed over too, beside the project scope rather than instead of it,
+    because user and feedback facts are stored there."""
     transcript = _transcript(tmp_path)
     enqueue(store.conn, path=str(transcript), agent="claude-code", session_id="s-1")
     _drain_capturing(store, tmp_path)
@@ -143,7 +145,7 @@ def test_the_scope_a_resumed_session_returns_is_the_project_one(tmp_path, store,
     ):
         drain(store, lock_path=tmp_path / "worker.lock")
 
-    assert seen and seen[0] == [project_scope(CWD)]
+    assert seen and seen[0] == sorted([project_scope(CWD), "global"])
 
 
 # ---------- 2. a watcher-queued job recovers the session id ----------

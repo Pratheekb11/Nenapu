@@ -50,7 +50,7 @@ from .models import (
     Status,
     now,
 )
-from .store import Store, effective_confidence, looks_contradictory, scope_for
+from .store import Store, _numbers, effective_confidence, scope_for
 
 # Keep the injected block small. It is prepended to every session, so it is
 # paid for on every request whether or not it gets used.
@@ -1023,10 +1023,9 @@ def _restates(fact: Fact, other: Fact) -> bool:
         return True  # one key is one subject with one value, by construction
     # Both conditions below have to hold, so the order is free to be the cheap
     # one first. `_distinct` is O(n^2) and asked this 123k times for a store of
-    # 500 facts, and `looks_contradictory` is a full analysis that also builds
-    # a reason string nothing here reads. Leaving it to the handful of pairs
-    # that actually look alike is what keeps the SessionStart hook inside its
-    # ten second timeout, which it was overrunning by 27 seconds.
+    # 500 facts. Leaving the similarity score to the handful of pairs that
+    # pass the length test is what keeps the SessionStart hook inside its ten
+    # second timeout, which it was overrunning by 27 seconds.
     #
     # Cheapest test first: two token sets of very different sizes cannot score
     # high enough. Jaccard is bounded above by the length ratio, and the
@@ -1039,10 +1038,15 @@ def _restates(fact: Fact, other: Fact) -> bool:
         return False
     if _similarity(fact.text, other.text) < REDUNDANCY_THRESHOLD:
         return False
-    # A disagreement is not a restatement. Asked here of facts that share no
-    # key, where a numeric mismatch is the clearest evidence there is that two
-    # sentences are about two different values.
-    return not looks_contradictory(fact.text, other.text)[0]
+    # A disagreement is not a restatement, and for facts that share no key a
+    # numeric mismatch is the clearest evidence there is that two sentences
+    # are about two different values. Only that: `looks_contradictory` is
+    # built for same-key facts, where any differing content word is a
+    # conflict, so asked here it read "must" against "should" as two values
+    # and let every rewording of a correction through. A number present in
+    # one and absent from the other counts too, since keeping the wrong one
+    # would drop the number.
+    return set(_numbers(fact.text)) == set(_numbers(other.text))
 
 
 def _distinct(facts: list[Fact]) -> list[Fact]:

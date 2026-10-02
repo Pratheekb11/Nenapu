@@ -72,7 +72,11 @@ def drain(store: Store, *, lock_path: str | Path | None = None, limit: int = 20)
                 if job is None:
                     break
                 try:
-                    touched.add(_ingest(store, job))
+                    # `global` as well as the session's own scope: user and
+                    # feedback facts are stored there whatever project they
+                    # came from, so it is touched by every ingest, and a tick
+                    # that never dedupes it leaves every correction duplicated.
+                    touched.update((_ingest(store, job), "global"))
                     mark_done(store.conn, job["id"])
                 except Exception as exc:  # noqa: BLE001 — one bad job, not a stuck queue
                     mark_failed(store.conn, job["id"], detail=str(exc)[:200])
