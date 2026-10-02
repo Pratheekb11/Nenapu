@@ -364,3 +364,37 @@ def test_a_released_job_can_be_queued_again_by_enqueue_once(tmp_path, store, db)
     _drain_capturing(store, tmp_path)
 
     assert _queue_rows(db)[0]["state"] == "done"
+
+
+# ---------- 5. corrections are deduped where they are stored ----------
+
+
+def test_a_drain_dedupes_the_global_scope_its_corrections_land_in(tmp_path, store, db):
+    """Feedback and user facts are routed to `global`, never to the project
+    scope the session ran in, but the drain only handed the project scope to
+    the tick. So the scope holding every correction was never deduped, and a
+    live store held four phrasings of one rule, all active."""
+    from nenapu.models import Fact, Kind, Status
+
+    texts = (
+        "The user is suspicious of wildcard deletes like `rm -f *` hidden in "
+        "chained commands, even in temp scratch folders. They interrupted one "
+        "and called it 'sus'. Run any delete as its own command with the full "
+        "path, and explain it first.",
+        "The user is suspicious of wildcard deletes such as `rm -f *` hidden "
+        "inside chained commands, even in temp scratch folders; run any delete "
+        "as its own command with the full path and explain it first.",
+    )
+
+    def observe(store, *_args, **_kwargs):
+        return [store.write(Fact(text=t, kind=Kind.FEEDBACK, scope="global",
+                                 confidence=0.9))[0] for t in texts]
+
+    enqueue(store.conn, path=str(_transcript(tmp_path)), agent="claude-code",
+            session_id="s-1")
+    with patch("nenapu.worker.observe_transcript", side_effect=observe):
+        drain(store, lock_path=tmp_path / "worker.lock")
+
+    active = [f for f in store.list_facts(scope="global", limit=100)
+              if f.status == Status.ACTIVE and "wildcard" in f.text]
+    assert len(active) == 1

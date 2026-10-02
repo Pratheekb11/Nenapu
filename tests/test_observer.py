@@ -775,6 +775,41 @@ def test_a_correction_is_not_hidden_behind_a_project_fact(store):
     assert "co-author" in block.split("do not repeat these:")[1].lower()
 
 
+def test_a_reworded_correction_takes_one_slot(store):
+    """Taken from a live session block, which listed this correction three
+    times. The two phrasings score 0.875, over the bar, but share no key, and
+    the contradiction check built for same-key facts read "must" against
+    "should" as two conflicting values. Keyless rewording is not a conflict."""
+    with store.transaction():
+        for text in (
+            "The user rejected the dark 'night' redesign of the MVP landing page. "
+            "It must copy the plain, simple style of Ui_Prototype_MVP_Prep/index.html. "
+            "Animations are welcome.",
+            "The user rejected the dark 'night' redesign of the MVP landing page. "
+            "It should copy the plain, simple style of Ui_Prototype_MVP_Prep/index.html, "
+            "and adding animations is fine.",
+        ):
+            store._insert(Fact(text=text, kind=Kind.FEEDBACK, confidence=0.9))
+
+    block = recall_context(store)
+
+    assert sum(1 for line in _lines(block) if "night" in line) == 1
+
+
+def test_keyless_lookalikes_with_different_numbers_both_survive(store):
+    """The guard the keyless path keeps: wording this close with two different
+    numbers is two values, not one claim said twice."""
+    with store.transaction():
+        for seconds in (30, 60):
+            store._insert(Fact(text=f"the upload endpoint times out after {seconds} "
+                                    "seconds behind the proxy",
+                               kind=Kind.ENVIRONMENT, confidence=0.9))
+
+    block = recall_context(store)
+
+    assert "30 seconds" in block and "60 seconds" in block
+
+
 def test_diversity_does_not_reorder_the_block(store):
     """Corrections first, then everything else — R2 removes restatements, it
     does not reshuffle what remains."""
